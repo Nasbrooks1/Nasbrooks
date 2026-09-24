@@ -1,5 +1,6 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useQuery } from "@tanstack/react-query";
+import { AudioModule, createAudioPlayer, type AudioPlayer } from "expo-audio";
 import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import { Image } from "expo-image";
@@ -10,6 +11,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Witness } from "@/src/api";
 import { colors, fonts, radius, spacing } from "@/src/theme";
+
+const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 type Line = { id: string; speaker: string; role: "judge" | "lawyer" | "witness" | "system"; text: string };
 
@@ -59,6 +62,42 @@ export default function Courtroom() {
     motions_denied: 0,
   });
   const listRef = useRef<FlatList<Line>>(null);
+  const playerRef = useRef<AudioPlayer | null>(null);
+  const [voiceOn, setVoiceOn] = useState(true);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  // Configure audio session once
+  useEffect(() => {
+    AudioModule.setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
+    return () => {
+      try {
+        playerRef.current?.remove();
+      } catch {}
+      playerRef.current = null;
+    };
+  }, []);
+
+  const playWitnessAudio = useCallback(async (text: string) => {
+    if (!voiceOn || !c || !currentWitness || !text.trim()) return;
+    try {
+      const { audio_url } = await api.getWitnessTTS({ case_id: c.id, witness_id: currentWitness.id, text });
+      const fullUrl = `${BACKEND}${audio_url}`;
+      // Tear down previous player, always create a fresh one to avoid stale state
+      try { playerRef.current?.remove(); } catch {}
+      const p = createAudioPlayer({ uri: fullUrl });
+      playerRef.current = p;
+      const onEnd = p.addListener("playbackStatusUpdate", (s: any) => {
+        if (s && s.didJustFinish) {
+          setIsSpeaking(false);
+          onEnd.remove();
+        }
+      });
+      setIsSpeaking(true);
+      p.play();
+    } catch {
+      setIsSpeaking(false);
+    }
+  }, [c, currentWitness, voiceOn]);
 
   const witnesses: Witness[] = c?.witnesses || [];
   const currentWitness = witnesses[witnessIdx];

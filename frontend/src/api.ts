@@ -34,6 +34,27 @@ export type Case = {
   judge?: Judge;
 };
 
+export type CampaignChapter = {
+  chapter: number;
+  title: string;
+  case_id: string;
+  nemesis_rank: string;
+  nemesis_level: number;
+  intro: string;
+  outro_win: string;
+  outro_loss: string;
+};
+export type CampaignState = {
+  campaign: {
+    user_id: string;
+    current_chapter: number;
+    completed_chapters: number[];
+    outcomes: Record<string, string>;
+    updated_at: string;
+  };
+  chapters: CampaignChapter[];
+};
+
 export type Highlight = {
   kind: "contradiction" | "objection_sustained" | "objection_overruled" | "evidence" | "verdict";
   speaker: string;
@@ -64,6 +85,14 @@ export const api = {
   getDailyCase: () => request<Case>(`/cases/daily`),
   getWitnessPortrait: (case_id: string, witness_id: string) =>
     request<{ data_url: string; cached: boolean }>(`/witness/${case_id}/${witness_id}/portrait`),
+  getWitnessTTS: (body: { case_id: string; witness_id: string; text: string }) =>
+    request<{ audio_url: string; voice: string; key: string }>(`/witness/tts`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getCampaign: (user_id: string) => request<CampaignState>(`/campaign/${user_id}`),
+  advanceCampaign: (body: { user_id: string; chapter: number; outcome: "win" | "loss" }) =>
+    request(`/campaign/advance`, { method: "POST", body: JSON.stringify(body) }),
   getReplayHighlights: (replay_id: string) =>
     request<Highlight[]>(`/replays/${replay_id}/highlights`),
   witnessRespond: (body: {

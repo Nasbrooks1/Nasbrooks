@@ -11,6 +11,7 @@ import hashlib
 import base64
 from pathlib import Path
 from datetime import datetime, timezone, date
+import emoji as emoji_lib
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
@@ -830,6 +831,203 @@ async def get_daily_case():
     c = _build_daily_case(day)
     await db.cases.update_one({"id": c.id}, {"$set": c.model_dump()}, upsert=True)
     return c
+
+# --------------------------------------------------------------------------
+# Voice testimony — OpenAI TTS via emergentintegrations.
+# Audio is cached on disk and served under /api/tts/{key}.mp3
+# --------------------------------------------------------------------------
+from fastapi.responses import FileResponse
+
+TTS_CACHE_DIR = Path("/tmp/ft_tts_cache")
+TTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+# Nine OpenAI voices — deterministic per witness role/name.
+TTS_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer"]
+
+def voice_for_witness(w: Witness) -> str:
+    # Deterministic voice pick per witness. Route "female-typical first names" toward
+    # nova/shimmer/coral; "male-typical" toward onyx/echo/ash; experts/agents toward sage.
+    key = (w.name + "|" + w.role).lower()
+    h = int(hashlib.sha256(key.encode()).hexdigest(), 16)
+    role = w.role.lower()
+    if "agent" in role or "expert" in role or "detective" in role:
+        pool = ["sage", "ash", "onyx", "echo"]
+    elif any(fem in w.name.lower() for fem in ["diane", "marla", "elena", "priya", "ruth", "sarah", "marisa", "yvonne", "aya", "simone"]):
+        pool = ["nova", "shimmer", "coral", "fable"]
+    elif "defendant" in role or "d. banks" in w.name.lower():
+        pool = ["onyx", "echo"]
+    else:
+        pool = TTS_VOICES
+    return pool[h % len(pool)]
+
+def clean_for_tts(text: str) -> str:
+    text = emoji_lib.replace_emoji(text, replace="")
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"`{1,3}[^`]*`{1,3}", "", text)
+    text = re.sub(r"[*_#>~|]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:2000]
+
+class TTSRequest(BaseModel):
+    case_id: str
+    witness_id: str
+    text: str
+
+class TTSResponse(BaseModel):
+    audio_url: str
+    voice: str
+    key: str
+
+@api.post("/witness/tts", response_model=TTSResponse)
+async def witness_tts(req: TTSRequest):
+    case_doc = await db.cases.find_one({"id": req.case_id}, {"_id": 0})
+    if not case_doc:
+        raise HTTPException(404, "Case not found")
+    case = Case(**case_doc)
+    witness = next((w for w in case.witnesses if w.id == req.witness_id), None)
+    if not witness:
+        raise HTTPException(404, "Witness not found")
+
+    voice = voice_for_witness(witness)
+    text = clean_for_tts(req.text)
+    if not text:
+        raise HTTPException(400, "Empty text after sanitation")
+
+    key_src = f"{text}|{voice}|1.0|tts-1|mp3"
+    key = hashlib.sha256(key_src.encode()).hexdigest()
+    out_path = TTS_CACHE_DIR / f"{key}.mp3"
+    if not out_path.exists():
+        if not EMERGENT_LLM_KEY:
+            raise HTTPException(500, "TTS unavailable — LLM key missing")
+        from emergentintegrations.llm.openai import OpenAITextToSpeech
+        tts = OpenAITextToSpeech(api_key=EMERGENT_LLM_KEY)
+        try:
+            audio_bytes = await tts.generate_speech(text=text, model="tts-1", voice=voice, response_format="mp3")
+        except Exception as e:
+            logger.exception("TTS failed")
+            raise HTTPException(500, f"TTS failed: {type(e).__name__}")
+        with open(out_path, "wb") as f:
+            f.write(audio_bytes)
+
+    return TTSResponse(audio_url=f"/api/tts/{key}.mp3", voice=voice, key=key)
+
+@api.get("/tts/{key}.mp3")
+async def serve_tts(key: str):
+    # Basic sanity check: hex sha256 = 64 chars
+    if not re.fullmatch(r"[a-f0-9]{64}", key):
+        raise HTTPException(404, "Not found")
+    p = TTS_CACHE_DIR / f"{key}.mp3"
+    if not p.exists():
+        raise HTTPException(404, "Not found")
+    return FileResponse(str(p), media_type="audio/mpeg", headers={"Cache-Control": "public, max-age=31536000"})
+
+# --------------------------------------------------------------------------
+# Career Storyline — "The Kane Files": 5 chapters, recurring nemesis prosecutor.
+# --------------------------------------------------------------------------
+class CampaignChapter(BaseModel):
+    chapter: int
+    title: str
+    case_id: str
+    nemesis_rank: str
+    nemesis_level: int
+    intro: str
+    outro_win: str
+    outro_loss: str
+
+CAMPAIGN_CHAPTERS: List[CampaignChapter] = [
+    CampaignChapter(
+        chapter=1,
+        title="Rookie's First File",
+        case_id="case-vega-2101",
+        nemesis_rank="Rookie AUSA",
+        nemesis_level=1,
+        intro="Your first assignment lands on your desk with a plain manila cover. Across the aisle, AUSA Robert Kane — fresh out of the DOJ Honors Program — smirks. 'Try not to embarrass yourself, counselor.'",
+        outro_win="Kane storms out of the courtroom without a word. He'll be back — and next time, he'll be ready.",
+        outro_loss="Kane leans in as the jury files out. 'Consider that your welcome-to-the-bar, kid.'",
+    ),
+    CampaignChapter(
+        chapter=2,
+        title="Zero-Day Discovery",
+        case_id="case-blackbyte-3300",
+        nemesis_rank="Trial AUSA",
+        nemesis_level=5,
+        intro="Six months later. Kane has been promoted to lead trial attorney on the cybercrime unit — and this time he brings a forensic team of three. He wants the ransomware conviction on his record.",
+        outro_win="Kane files a motion for reconsideration. It'll be denied, but he wants the record to show he fought.",
+        outro_loss="Kane raises his coffee cup in salute across the aisle. 'Better luck on appeal.'",
+    ),
+    CampaignChapter(
+        chapter=3,
+        title="The Racket",
+        case_id="case-johnson-1047",
+        nemesis_rank="Senior Trial AUSA",
+        nemesis_level=10,
+        intro="Kane has finally landed the case he's been building his career on: a multi-defendant RICO conspiracy. He's brought in cooperators, wiretaps, and eighteen months of grand jury testimony. He does not intend to lose.",
+        outro_win="Kane's second chair congratulates you in the elevator. Kane doesn't ride the elevator with the two of you.",
+        outro_loss="Kane holds a press conference on the courthouse steps. He mentions you by name.",
+    ),
+    CampaignChapter(
+        chapter=4,
+        title="The Spotlight",
+        case_id="case-fiction-durk-99",
+        nemesis_rank="Chief AUSA",
+        nemesis_level=15,
+        intro="Kane has been elevated to Chief of the Violent Crimes Section, and he has chosen this high-profile file himself. Cameras line the corridor. Every ruling will be reported before you reach your car.",
+        outro_win="Kane refuses interviews. He returns to his office and closes the door.",
+        outro_loss="Kane gives a triumphant statement to CNN. Your name is in the chyron.",
+    ),
+    CampaignChapter(
+        chapter=5,
+        title="The Kane Reckoning",
+        case_id="daily",  # dynamic — replaced with today's daily case id at runtime
+        nemesis_rank="U.S. Attorney (nominated)",
+        nemesis_level=20,
+        intro="Today, Kane's nomination for U.S. Attorney is pending Senate confirmation. He has taken this final case personally — a chance to close his tenure with a signature win. Only one of you walks away with the record.",
+        outro_win="Kane's nomination is quietly withdrawn the following week. You will not see him in a federal courtroom again.",
+        outro_loss="Kane is sworn in as U.S. Attorney a month later. He mentions your case in his acceptance speech.",
+    ),
+]
+
+class Campaign(BaseModel):
+    user_id: str = "guest"
+    current_chapter: int = 1  # 1-indexed
+    completed_chapters: List[int] = []
+    outcomes: Dict[str, str] = {}  # chapter number as str -> "win" | "loss"
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+def _resolve_chapter(ch: CampaignChapter) -> CampaignChapter:
+    """Substitute dynamic case ids (e.g. 'daily') with today's actual id."""
+    if ch.case_id == "daily":
+        ch = ch.model_copy(update={"case_id": f"daily-{date.today().isoformat()}"})
+    return ch
+
+@api.get("/campaign/{user_id}")
+async def get_campaign(user_id: str):
+    doc = await db.campaign.find_one({"user_id": user_id}, {"_id": 0})
+    camp = Campaign(**doc) if doc else Campaign(user_id=user_id)
+    resolved = [_resolve_chapter(c) for c in CAMPAIGN_CHAPTERS]
+    return {"campaign": camp.model_dump(), "chapters": [c.model_dump() for c in resolved]}
+
+class CampaignAdvance(BaseModel):
+    user_id: str = "guest"
+    chapter: int
+    outcome: str  # "win" | "loss"
+
+@api.post("/campaign/advance")
+async def advance_campaign(body: CampaignAdvance):
+    doc = await db.campaign.find_one({"user_id": body.user_id}, {"_id": 0})
+    camp = Campaign(**doc) if doc else Campaign(user_id=body.user_id)
+    if body.chapter not in camp.completed_chapters:
+        camp.completed_chapters.append(body.chapter)
+    camp.outcomes[str(body.chapter)] = body.outcome
+    if body.outcome == "win" and body.chapter == camp.current_chapter and camp.current_chapter < len(CAMPAIGN_CHAPTERS):
+        camp.current_chapter += 1
+    camp.updated_at = datetime.now(timezone.utc).isoformat()
+    await db.campaign.update_one(
+        {"user_id": body.user_id},
+        {"$set": camp.model_dump()},
+        upsert=True,
+    )
+    return camp
 
 app.include_router(api)
 app.add_middleware(
