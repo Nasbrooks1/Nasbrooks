@@ -1,6 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useQuery } from "@tanstack/react-query";
-import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useRouter } from "expo-router";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api } from "@/src/api";
@@ -10,7 +11,9 @@ const USER_ID = "guest";
 
 export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { data } = useQuery({ queryKey: ["career", USER_ID], queryFn: () => api.getCareer(USER_ID) });
+  const { data: replays } = useQuery({ queryKey: ["replays", USER_ID], queryFn: () => api.listReplays(USER_ID) });
   const level = data?.level ?? 1;
   const xp = data?.xp ?? 0;
 
@@ -33,6 +36,24 @@ export default function ProfileScreen() {
           <Stat label="XP" value={String(xp)} />
           <Stat label="WINS" value={String(data?.completed_cases.length ?? 0)} />
         </View>
+
+        <Text style={styles.sectionTitle}>Trials</Text>
+        <Pressable
+          testID="profile-replays"
+          onPress={() => router.push("/replays")}
+          style={({ pressed }) => [styles.card, { padding: spacing.md, flexDirection: "row", alignItems: "center", gap: spacing.md }, pressed && { opacity: 0.85 }]}
+        >
+          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" }}>
+            <Ionicons name="film" size={20} color={colors.brandPrimary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.onSurface, fontFamily: fonts.text, fontSize: 14, fontWeight: "700" }}>My Replays</Text>
+            <Text style={{ color: colors.muted, fontFamily: fonts.text, fontSize: 12, marginTop: 2 }}>
+              {replays?.length || 0} saved trial{(replays?.length || 0) === 1 ? "" : "s"} · view & share
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
 
         <Text style={styles.sectionTitle}>Preferences</Text>
         <View style={styles.card}>

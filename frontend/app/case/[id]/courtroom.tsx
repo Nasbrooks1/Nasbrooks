@@ -3,8 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Modal, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Witness } from "@/src/api";
@@ -12,41 +12,42 @@ import { colors, fonts, radius, spacing } from "@/src/theme";
 
 type Line = { id: string; speaker: string; role: "judge" | "lawyer" | "witness" | "system"; text: string };
 
-const QUESTION_BANK: { direct: string[]; cross: string[] } = {
-  direct: [
-    "Please state your name and occupation for the record.",
-    "Walk the jury through what happened that night.",
-    "How can you be certain of what you saw?",
-    "Was anyone else present at the time?",
-    "Did you preserve chain of custody?",
-  ],
-  cross: [
-    "Isn't it true you have a cooperation agreement with the government?",
-    "You've been convicted of a felony involving dishonesty, correct?",
-    "You didn't actually see the transaction take place, did you?",
-    "You never mentioned this detail in your initial statement, correct?",
-    "You're being paid for your testimony, aren't you?",
-  ],
-};
+const DIRECT_QUESTIONS = [
+  "Please state your name and occupation for the record.",
+  "Walk the jury through what happened that night.",
+  "How can you be certain of what you saw?",
+  "Was anyone else present at the time?",
+  "Did you preserve chain of custody?",
+];
+
+const CROSS_QUESTIONS_BASE = [
+  "Isn't it true you have a cooperation agreement with the government?",
+  "You didn't actually see the transaction take place, did you?",
+];
 
 const OBJECTIONS = ["Hearsay", "Relevance", "Speculation", "Leading", "Foundation", "Asked and Answered", "Argumentative"] as const;
 
 export default function Courtroom() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id, role = "prosecutor" } = useLocalSearchParams<{ id: string; role?: string }>();
+  const { id, role = "prosecutor", clues: cluesParam } = useLocalSearchParams<{ id: string; role?: string; clues?: string }>();
   const { data: c } = useQuery({ queryKey: ["case", id], queryFn: () => api.getCase(id) });
+
+  const unlockedClueIds = useMemo(() => new Set((cluesParam || "").split(",").filter(Boolean)), [cluesParam]);
+  const unlockedCrossQuestions = useMemo(
+    () => (c?.clues || []).filter((cl) => unlockedClueIds.has(cl.id)).map((cl) => cl.unlocks_question),
+    [c, unlockedClueIds],
+  );
 
   const [phase, setPhase] = useState<"opening" | "direct" | "cross">("opening");
   const [witnessIdx, setWitnessIdx] = useState(0);
-  const [lines, setLines] = useState<Line[]>([
-    { id: "l0", speaker: "COURT CRIER", role: "system", text: "All rise. This court is now in session." },
-    { id: "l1", speaker: "JUDGE", role: "judge", text: `Ladies and gentlemen of the jury, we begin ${c?.title || "the trial"}. Counsel, opening statements.` },
-  ]);
+  const [lines, setLines] = useState<Line[]>([]);
   const [busy, setBusy] = useState(false);
   const [showQuestions, setShowQuestions] = useState(false);
   const [showObjections, setShowObjections] = useState(false);
+  const [customQuestion, setCustomQuestion] = useState("");
   const [lastQuestion, setLastQuestion] = useState<string>("");
+  const [streamingLineId, setStreamingLineId] = useState<string | null>(null);
   const [stats, setStats] = useState({
     objections_won: 0,
     objections_lost: 0,
@@ -61,76 +62,123 @@ export default function Courtroom() {
   const witnesses: Witness[] = c?.witnesses || [];
   const currentWitness = witnesses[witnessIdx];
 
-  const push = useCallback((line: Omit<Line, "id">) => {
-    setLines((l) => [...l, { ...line, id: `l-${l.length}-${Date.now()}` }]);
+  // Seed opening lines once case loads
+  useEffect(() => {
+    if (c && lines.length === 0) {
+      setLines([
+        { id: "l0", speaker: "COURT CRIER", role: "system", text: "All rise. This court is now in session." },
+        { id: "l1", speaker: "JUDGE", role: "judge", text: `Ladies and gentlemen of the jury, we begin ${c.title}. Counsel, opening statements.` },
+      ]);
+    }
+  }, [c, lines.length]);
+
+  const pushLine = useCallback((line: Omit<Line, "id">) => {
+    const withId = { ...line, id: `l-${Date.now()}-${Math.random().toString(36).slice(2, 6)}` };
+    setLines((l) => [...l, withId]);
     setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 50);
+    return withId.id;
   }, []);
 
   const beginTestimony = useCallback(() => {
     if (!currentWitness) return;
-    push({ speaker: "BAILIFF", role: "system", text: `The government calls ${currentWitness.name} to the stand.` });
-    push({ speaker: "JUDGE", role: "judge", text: `${currentWitness.name}, please be sworn in. Counsel, you may proceed.` });
+    pushLine({ speaker: "BAILIFF", role: "system", text: `The government calls ${currentWitness.name} to the stand.` });
+    pushLine({ speaker: "JUDGE", role: "judge", text: `${currentWitness.name}, please be sworn in. Counsel, you may proceed.` });
     setPhase("direct");
-  }, [currentWitness, push]);
+  }, [currentWitness, pushLine]);
 
-  const askQuestion = useCallback(
-    async (q: string) => {
-      if (!c || !currentWitness) return;
-      setShowQuestions(false);
-      setLastQuestion(q);
-      push({ speaker: role === "defense" ? "DEFENSE" : "PROSECUTION", role: "lawyer", text: q });
-      setBusy(true);
+  const streamWitnessReply = useCallback(async (question: string) => {
+    if (!c || !currentWitness) return;
+    setBusy(true);
+    // Push placeholder line we will fill token by token
+    const lineId = pushLine({ speaker: currentWitness.name.toUpperCase(), role: "witness", text: "" });
+    setStreamingLineId(lineId);
+
+    let full = "";
+    try {
+      for await (const chunk of api.witnessStream({
+        case_id: c.id,
+        witness_id: currentWitness.id,
+        question,
+        is_cross_examination: phase === "cross",
+        mood: "neutral",
+      })) {
+        full += chunk;
+        setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, text: full } : l)));
+        listRef.current?.scrollToEnd({ animated: true });
+      }
+    } catch {
+      // Fallback to non-streaming
       try {
         const resp = await api.witnessRespond({
           case_id: c.id,
           witness_id: currentWitness.id,
-          question: q,
+          question,
           is_cross_examination: phase === "cross",
           mood: "neutral",
         });
-        push({ speaker: currentWitness.name.toUpperCase(), role: "witness", text: resp.text });
-        setStats((s) => ({
-          ...s,
-          witnesses_examined: s.witnesses_examined + (phase === "direct" ? 0 : 0),
-          contradictions_exposed: s.contradictions_exposed + (resp.contradicted ? 1 : 0),
-        }));
-        if (resp.contradicted) {
-          push({ speaker: "COURT", role: "system", text: "⚡ The witness's answer contradicts prior testimony." });
+        full = resp.text;
+        // Reveal word by word (typewriter fallback)
+        const words = full.split(/(\s+)/);
+        let cur = "";
+        for (const w of words) {
+          cur += w;
+          setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, text: cur } : l)));
+          await new Promise((r) => setTimeout(r, 60));
         }
-      } catch (e: any) {
-        push({ speaker: "COURT", role: "system", text: "The witness is unresponsive. (Network error.)" });
-      } finally {
-        setBusy(false);
+        if (resp.contradicted) {
+          pushLine({ speaker: "COURT", role: "system", text: "⚡ The witness's answer contradicts prior testimony." });
+          setStats((s) => ({ ...s, contradictions_exposed: s.contradictions_exposed + 1 }));
+        }
+      } catch {
+        setLines((prev) => prev.map((l) => (l.id === lineId ? { ...l, text: "[Witness unresponsive.]" } : l)));
       }
+    } finally {
+      // Heuristic contradiction detection on streamed text
+      const low = full.toLowerCase();
+      const contradicted = ["i was wrong", "i misspoke", "i mis-spoke", "i don't recall", "actually,", "correction"].some((k) => low.includes(k));
+      if (contradicted && phase === "cross") {
+        pushLine({ speaker: "COURT", role: "system", text: "⚡ Contradiction exposed on cross-examination." });
+        setStats((s) => ({ ...s, contradictions_exposed: s.contradictions_exposed + 1 }));
+      }
+      setStreamingLineId(null);
+      setBusy(false);
+    }
+  }, [c, currentWitness, phase, pushLine]);
+
+  const askQuestion = useCallback(
+    async (q: string) => {
+      setShowQuestions(false);
+      setCustomQuestion("");
+      setLastQuestion(q);
+      pushLine({ speaker: role === "defense" ? "DEFENSE" : "PROSECUTION", role: "lawyer", text: q });
+      await streamWitnessReply(q);
     },
-    [c, currentWitness, phase, push, role],
+    [pushLine, role, streamWitnessReply],
   );
 
   const raiseObjection = useCallback(
     async (type: string) => {
       setShowObjections(false);
       if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
-      push({ speaker: role === "defense" ? "PROSECUTION" : "DEFENSE", role: "lawyer", text: `Objection — ${type}.` });
+      pushLine({ speaker: role === "defense" ? "PROSECUTION" : "DEFENSE", role: "lawyer", text: `Objection — ${type}.` });
       setBusy(true);
       try {
         const ruling = await api.objectionRule({ objection_type: type, question: lastQuestion });
-        push({ speaker: "JUDGE", role: "judge", text: `${ruling.ruling.toUpperCase()}. ${ruling.reasoning}` });
-        // If the player is objecting: player role is opposite of lawyer who asked, so sustained means player wins
-        const playerObjecting = true; // player raised the objection in this flow
-        const won = playerObjecting && ruling.ruling === "sustained";
+        pushLine({ speaker: "JUDGE", role: "judge", text: `${ruling.ruling.toUpperCase()}. ${ruling.reasoning}` });
+        const won = ruling.ruling === "sustained";
         setStats((s) => ({
           ...s,
           objections_won: s.objections_won + (won ? 1 : 0),
           objections_lost: s.objections_lost + (won ? 0 : 1),
         }));
       } catch {
-        push({ speaker: "JUDGE", role: "judge", text: "Overruled. The court has already ruled." });
+        pushLine({ speaker: "JUDGE", role: "judge", text: "Overruled. The court has already ruled." });
         setStats((s) => ({ ...s, objections_lost: s.objections_lost + 1 }));
       } finally {
         setBusy(false);
       }
     },
-    [lastQuestion, push, role],
+    [lastQuestion, pushLine, role],
   );
 
   const introduceEvidence = useCallback(() => {
@@ -138,44 +186,57 @@ export default function Courtroom() {
     const nextIdx = stats.evidence_introduced;
     const item = c.evidence[nextIdx];
     if (!item) {
-      push({ speaker: "COURT", role: "system", text: "All exhibits have been introduced." });
+      pushLine({ speaker: "COURT", role: "system", text: "All exhibits have been introduced." });
       return;
     }
-    push({ speaker: role === "defense" ? "DEFENSE" : "PROSECUTION", role: "lawyer", text: `Your Honor, the government moves to admit Exhibit ${nextIdx + 1}: ${item.label}.` });
-    push({ speaker: "JUDGE", role: "judge", text: `Received. Exhibit ${nextIdx + 1} is admitted.` });
+    pushLine({ speaker: role === "defense" ? "DEFENSE" : "PROSECUTION", role: "lawyer", text: `Your Honor, the government moves to admit Exhibit ${nextIdx + 1}: ${item.label}.` });
+    pushLine({ speaker: "JUDGE", role: "judge", text: `Received. Exhibit ${nextIdx + 1} is admitted.` });
     setStats((s) => ({ ...s, evidence_introduced: s.evidence_introduced + 1 }));
-  }, [c, push, role, stats.evidence_introduced]);
+  }, [c, pushLine, role, stats.evidence_introduced]);
+
+  const goVerdict = useCallback(() => {
+    router.replace({
+      pathname: "/case/[id]/verdict",
+      params: {
+        id: id!,
+        role,
+        stats: JSON.stringify(stats),
+        transcript: JSON.stringify(lines.map((l) => ({ speaker: l.speaker, role: l.role, text: l.text }))),
+      },
+    });
+  }, [id, lines, role, router, stats]);
 
   const nextPhase = useCallback(() => {
     if (phase === "opening") {
-      push({ speaker: role === "defense" ? "DEFENSE" : "PROSECUTION", role: "lawyer", text: "May it please the court, the evidence in this case will show..." });
-      push({ speaker: "JUDGE", role: "judge", text: "Very well. Call your first witness." });
+      pushLine({ speaker: role === "defense" ? "DEFENSE" : "PROSECUTION", role: "lawyer", text: "May it please the court, the evidence will show..." });
+      pushLine({ speaker: "JUDGE", role: "judge", text: "Very well. Call your first witness." });
       beginTestimony();
     } else if (phase === "direct") {
       setPhase("cross");
-      push({ speaker: "JUDGE", role: "judge", text: "Cross-examination." });
+      pushLine({ speaker: "JUDGE", role: "judge", text: "Cross-examination." });
     } else {
-      // Move to next witness or verdict
       setStats((s) => ({ ...s, witnesses_examined: s.witnesses_examined + 1 }));
       if (witnessIdx + 1 < witnesses.length) {
         setWitnessIdx((i) => i + 1);
         setPhase("direct");
         setTimeout(() => beginTestimony(), 100);
       } else {
-        // Deliver to verdict
-        router.replace({ pathname: "/case/[id]/verdict", params: { id: id!, role, stats: JSON.stringify(stats) } });
+        goVerdict();
       }
     }
-  }, [beginTestimony, id, phase, push, role, router, stats, witnessIdx, witnesses.length]);
-
-  const goVerdict = useCallback(() => {
-    router.replace({ pathname: "/case/[id]/verdict", params: { id: id!, role, stats: JSON.stringify(stats) } });
-  }, [id, role, router, stats]);
+  }, [beginTestimony, goVerdict, phase, pushLine, role, witnessIdx, witnesses.length]);
 
   const speakerTitle = useMemo(() => {
     if (phase === "opening") return "Judge presiding";
     return currentWitness ? `${currentWitness.name} — ${currentWitness.role}` : "";
   }, [currentWitness, phase]);
+
+  const questionOptions = useMemo(() => {
+    if (phase === "cross") {
+      return [...unlockedCrossQuestions, ...CROSS_QUESTIONS_BASE];
+    }
+    return DIRECT_QUESTIONS;
+  }, [phase, unlockedCrossQuestions]);
 
   if (!c) {
     return (
@@ -187,7 +248,6 @@ export default function Courtroom() {
 
   return (
     <View style={styles.root} testID="courtroom-screen">
-      {/* Top: speaker panel */}
       <View style={[styles.topPanel, { paddingTop: insets.top + spacing.md }]}>
         <View style={styles.topHeaderRow}>
           <Pressable onPress={() => router.back()} style={styles.iconBtn} testID="court-back">
@@ -204,11 +264,7 @@ export default function Courtroom() {
 
         <View style={styles.speakerCard}>
           <View style={styles.speakerAvatar}>
-            <Ionicons
-              name={phase === "opening" ? "hammer" : "person"}
-              size={40}
-              color={colors.brandPrimary}
-            />
+            <Ionicons name={phase === "opening" ? "hammer" : "person"} size={40} color={colors.brandPrimary} />
           </View>
           <Text style={styles.speakerName}>{speakerTitle}</Text>
           <View style={styles.pill}>
@@ -218,16 +274,14 @@ export default function Courtroom() {
         </View>
       </View>
 
-      {/* Transcript */}
       <FlatList
         ref={listRef}
         data={lines}
         keyExtractor={(l) => l.id}
-        contentContainerStyle={{ padding: spacing.xl, paddingBottom: 200, gap: spacing.md }}
-        renderItem={({ item }) => <TranscriptLine line={item} />}
+        contentContainerStyle={{ padding: spacing.xl, paddingBottom: 240, gap: spacing.md }}
+        renderItem={({ item }) => <TranscriptLine line={item} typing={item.id === streamingLineId} />}
       />
 
-      {/* Action bar */}
       <View style={[styles.actionBar, { paddingBottom: insets.bottom + spacing.md }]}>
         {Platform.OS !== "web" && <BlurView tint="dark" intensity={40} style={StyleSheet.absoluteFill} />}
         <View style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(10,11,14,0.9)" }]} />
@@ -236,7 +290,7 @@ export default function Courtroom() {
           <ActionBtn testID="act-evidence" icon="documents" label="EVIDENCE" onPress={introduceEvidence} disabled={busy} />
           <ActionBtn testID="act-objection" icon="hand-left" label="OBJECTION" onPress={() => setShowObjections(true)} highlight disabled={busy || phase === "opening"} />
         </View>
-        <Pressable testID="act-next-phase" onPress={nextPhase} style={styles.nextBtn}>
+        <Pressable testID="act-next-phase" onPress={nextPhase} style={styles.nextBtn} disabled={busy}>
           <Text style={styles.nextText}>
             {phase === "opening" ? "BEGIN TESTIMONY" : phase === "direct" ? "CROSS-EXAMINE" : witnessIdx + 1 < witnesses.length ? "NEXT WITNESS" : "TO DELIBERATION"}
           </Text>
@@ -244,21 +298,54 @@ export default function Courtroom() {
         </Pressable>
       </View>
 
-      {/* Question sheet */}
+      {/* Question sheet with custom input */}
       <Modal visible={showQuestions} transparent animationType="fade" onRequestClose={() => setShowQuestions(false)}>
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowQuestions(false)} testID="question-backdrop">
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Ask a Question</Text>
-            <Text style={styles.modalSub}>{phase === "direct" ? "Direct examination" : "Cross-examination"}</Text>
-            <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
-              {(phase === "cross" ? QUESTION_BANK.cross : QUESTION_BANK.direct).map((q) => (
-                <Pressable key={q} testID={`ask-${q.slice(0, 12)}`} style={styles.modalOption} onPress={() => askQuestion(q)}>
-                  <Text style={styles.modalOptionText}>{q}</Text>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+          <Pressable style={styles.modalBackdrop} onPress={() => setShowQuestions(false)} testID="question-backdrop">
+            <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.modalTitle}>Ask a Question</Text>
+              <Text style={styles.modalSub}>{phase === "direct" ? "Direct examination" : "Cross-examination"}{phase === "cross" && unlockedCrossQuestions.length > 0 ? ` · ${unlockedCrossQuestions.length} unlocked from investigation` : ""}</Text>
+
+              <ScrollView style={{ maxHeight: 280 }} contentContainerStyle={{ gap: spacing.sm, paddingVertical: spacing.md }}>
+                {questionOptions.map((q, i) => {
+                  const isUnlocked = phase === "cross" && i < unlockedCrossQuestions.length;
+                  return (
+                    <Pressable key={q} testID={`ask-opt-${i}`} style={[styles.modalOption, isUnlocked && styles.modalOptionUnlocked]} onPress={() => askQuestion(q)}>
+                      {isUnlocked && (
+                        <View style={styles.unlockedBadge}>
+                          <Ionicons name="sparkles" size={10} color={colors.brandPrimary} />
+                          <Text style={styles.unlockedBadgeText}>FROM INVESTIGATION</Text>
+                        </View>
+                      )}
+                      <Text style={styles.modalOptionText}>{q}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
+              <View style={styles.customRow}>
+                <TextInput
+                  testID="custom-question-input"
+                  value={customQuestion}
+                  onChangeText={setCustomQuestion}
+                  placeholder="Type your own question…"
+                  placeholderTextColor={colors.muted}
+                  style={styles.customInput}
+                  multiline
+                  onSubmitEditing={() => customQuestion.trim() && askQuestion(customQuestion.trim())}
+                />
+                <Pressable
+                  testID="custom-question-send"
+                  disabled={!customQuestion.trim()}
+                  onPress={() => askQuestion(customQuestion.trim())}
+                  style={[styles.sendBtn, !customQuestion.trim() && { opacity: 0.4 }]}
+                >
+                  <Ionicons name="send" size={16} color={colors.onBrandPrimary} />
                 </Pressable>
-              ))}
-            </View>
-          </View>
-        </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Objection overlay */}
@@ -284,15 +371,21 @@ export default function Courtroom() {
   );
 }
 
-function TranscriptLine({ line }: { line: Line }) {
+function TranscriptLine({ line, typing }: { line: Line; typing?: boolean }) {
   const isJudge = line.role === "judge";
   const isSystem = line.role === "system";
   const isLawyer = line.role === "lawyer";
   const color = isJudge ? colors.brandPrimary : isSystem ? colors.muted : isLawyer ? colors.info : colors.onSurface;
   return (
     <View style={{ gap: 4 }}>
-      <Text style={[tStyles.speaker, { color }]}>{line.speaker}</Text>
-      <Text style={[tStyles.text, isSystem && { fontStyle: "italic", color: colors.muted }]}>{line.text}</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+        <Text style={[tStyles.speaker, { color }]}>{line.speaker}</Text>
+        {typing && <View style={tStyles.typingDot} />}
+      </View>
+      <Text style={[tStyles.text, isSystem && { fontStyle: "italic", color: colors.muted }]}>
+        {line.text}
+        {typing && line.text.length === 0 ? "…" : ""}
+      </Text>
     </View>
   );
 }
@@ -300,6 +393,7 @@ function TranscriptLine({ line }: { line: Line }) {
 const tStyles = StyleSheet.create({
   speaker: { fontFamily: fonts.text, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
   text: { color: colors.onSurface, fontFamily: fonts.text, fontSize: 14, lineHeight: 21 },
+  typingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.brandPrimary },
 });
 
 function ActionBtn({
@@ -348,7 +442,13 @@ const styles = StyleSheet.create({
   modalTitle: { color: colors.onSurface, fontFamily: fonts.display, fontSize: 22, fontWeight: "600" },
   modalSub: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 11, letterSpacing: 2, fontWeight: "700", marginTop: 4 },
   modalOption: { padding: spacing.md, backgroundColor: colors.surfaceTertiary, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  modalOptionUnlocked: { borderColor: colors.brandPrimary, backgroundColor: "rgba(212,175,55,0.1)" },
+  unlockedBadge: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 4 },
+  unlockedBadgeText: { color: colors.brandPrimary, fontSize: 9, fontWeight: "700", letterSpacing: 1.5, fontFamily: fonts.text },
   modalOptionText: { color: colors.onSurface, fontFamily: fonts.text, fontSize: 14, lineHeight: 20 },
+  customRow: { flexDirection: "row", gap: spacing.sm, alignItems: "flex-end", marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider },
+  customInput: { flex: 1, minHeight: 48, maxHeight: 120, paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.brandPrimary, color: colors.onSurface, fontFamily: fonts.text, fontSize: 14, backgroundColor: colors.surfaceTertiary },
+  sendBtn: { width: 48, height: 48, borderRadius: radius.md, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
   objectionSheet: { flex: 1, padding: spacing.xl, justifyContent: "center", gap: spacing.md },
   objTitle: { color: colors.brandPrimary, fontFamily: fonts.display, fontSize: 48, fontWeight: "700", textAlign: "center", letterSpacing: 2 },
   objSub: { color: colors.onSurface, fontFamily: fonts.text, fontSize: 13, textAlign: "center" },

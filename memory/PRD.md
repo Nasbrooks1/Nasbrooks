@@ -40,3 +40,9 @@ Glass / Luxe DARK per `/app/design_guidelines.json`: obsidian surfaces (#0A0B0E)
 
 ## Not in MVP
 Multiplayer, Create Case editor, extended Career branching, pass-and-play. All are visible entry points but non-functional stubs.
+
+## v1.1 additions (Sep 2026)
+- **Trial Replay** — every completed trial saves its full transcript + verdict via `POST /api/replays/save`; list in Profile → My Replays; individual `/replay/[id]` screen with Share (native Share sheet or web clipboard) and Delete.
+- **Streaming Witnesses** — new `POST /api/witness/stream` SSE endpoint uses `LlmChat.stream_message` with Claude Sonnet 4.6; tokens appear word-by-word in the courtroom transcript, with a fallback to non-streaming + typewriter reveal.
+- **Investigation Payoff** — each seeded case now includes `clues[]` where each clue is tied to an investigation action (witnesses, phone, surveillance, documents, financial, forensic) and carries a specific cross-exam question. Opened folders in Investigation surface those clues; the discovered clue IDs are passed to the courtroom, and their questions appear in the cross-exam sheet with a "FROM INVESTIGATION" badge.
+- **Custom Questions** — the courtroom question sheet includes a multi-line TextInput + send button. Typed questions post to the transcript as counsel and stream a witness reply.

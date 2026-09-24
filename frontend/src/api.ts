@@ -15,6 +15,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type Evidence = { id: string; label: string; kind: string; summary: string };
 export type Witness = { id: string; name: string; role: string; persona: string; key_facts: string[] };
+export type Clue = { id: string; action: string; label: string; unlocks_question: string };
 export type Case = {
   id: string;
   case_number: string;
@@ -27,6 +28,23 @@ export type Case = {
   hero_image?: string;
   evidence: Evidence[];
   witnesses: Witness[];
+  clues: Clue[];
+};
+
+export type TranscriptLine = { speaker: string; role: string; text: string };
+export type Replay = {
+  id: string;
+  user_id: string;
+  case_id: string;
+  case_title: string;
+  role: string;
+  verdict: string;
+  per_charge: Record<string, string>;
+  sentence: string | null;
+  xp_earned: number;
+  transcript: TranscriptLine[];
+  stats: Record<string, number>;
+  created_at: string;
 };
 
 export const api = {
@@ -75,4 +93,46 @@ export const api = {
       `/career/${user_id}`,
     ),
   saveCareer: (body: any) => request(`/career/save`, { method: "POST", body: JSON.stringify(body) }),
+
+  saveReplay: (body: Omit<Replay, "id" | "created_at"> & { id?: string; created_at?: string }) =>
+    request<Replay>(`/replays/save`, { method: "POST", body: JSON.stringify(body) }),
+  listReplays: (user_id = "guest") => request<Replay[]>(`/replays?user_id=${user_id}`),
+  getReplay: (id: string) => request<Replay>(`/replays/${id}`),
+  deleteReplay: (id: string) => request(`/replays/${id}`, { method: "DELETE" }),
+
+  // Streaming witness — reads SSE from /api/witness/stream and yields token chunks.
+  witnessStream: async function* (body: {
+    case_id: string;
+    witness_id: string;
+    question: string;
+    is_cross_examination: boolean;
+    mood: string;
+  }): AsyncGenerator<string, void, unknown> {
+    const res = await fetch(`${BASE}/api/witness/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok || !res.body) throw new Error(`Stream ${res.status}`);
+    const reader = (res.body as any).getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+      for (const part of parts) {
+        const lines = part.split("\n");
+        const isDone = lines.some((l) => l.startsWith("event: done"));
+        if (isDone) return;
+        const dataLine = lines.find((l) => l.startsWith("data: "));
+        if (dataLine) {
+          const raw = dataLine.slice(6).replace(/\\n/g, "\n");
+          if (raw) yield raw;
+        }
+      }
+    }
+  },
 };

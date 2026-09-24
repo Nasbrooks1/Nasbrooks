@@ -44,6 +44,12 @@ class Evidence(BaseModel):
     kind: str  # photo, document, video, message, financial, forensic
     summary: str
 
+class Clue(BaseModel):
+    id: str
+    action: str  # matches investigation action key: witnesses, phone, surveillance, documents, financial, forensic
+    label: str  # short clue name shown in investigation folder
+    unlocks_question: str  # the cross-examination question this clue unlocks
+
 class Case(BaseModel):
     id: str
     case_number: str
@@ -56,6 +62,7 @@ class Case(BaseModel):
     hero_image: Optional[str] = None
     evidence: List[Evidence] = []
     witnesses: List[Witness] = []
+    clues: List[Clue] = []
 
 class WitnessRequest(BaseModel):
     case_id: str
@@ -108,6 +115,25 @@ class CareerProgress(BaseModel):
     role_focus: str = "prosecutor"
     completed_cases: List[str] = []
 
+class TranscriptLine(BaseModel):
+    speaker: str
+    role: str  # judge, lawyer, witness, system
+    text: str
+
+class Replay(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = "guest"
+    case_id: str
+    case_title: str
+    role: str
+    verdict: str
+    per_charge: Dict[str, str] = {}
+    sentence: Optional[str] = None
+    xp_earned: int = 0
+    transcript: List[TranscriptLine] = []
+    stats: Dict[str, int] = {}
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
 # --------------------------------------------------------------------------
 # Seed cases
 # --------------------------------------------------------------------------
@@ -138,6 +164,12 @@ SEED_CASES: List[Case] = [
                     persona="A soft-spoken forensic scientist. Explains methodology carefully. Concedes limits of the science when pressed.",
                     key_facts=["Compared 14 striations on recovered casings", "Uses AFTE methodology", "Concedes match probability is not statistical"]),
         ],
+        clues=[
+            Clue(id="c1", action="phone", label="Burner phone ping 3.2 miles away", unlocks_question="If you personally observed the meet, why do your own cell tower records place your handset 3.2 miles away that night?"),
+            Clue(id="c2", action="witnesses", label="Cooperator's 5K1.1 letter", unlocks_question="You signed a 5K1.1 cooperation agreement to reduce your own 20-year exposure, didn't you?"),
+            Clue(id="c3", action="forensic", label="AFTE methodology has no error rate", unlocks_question="Doctor, the AFTE toolmark methodology has no established statistical error rate, correct?"),
+            Clue(id="c4", action="surveillance", label="Missing 14-minute window on the pole cam", unlocks_question="There's a 14-minute gap in the pole-camera footage right before the alleged hand-off, isn't there?"),
+        ],
     ),
     Case(
         id="case-vega-2101",
@@ -160,6 +192,11 @@ SEED_CASES: List[Case] = [
             Witness(id="w2", name="Priya Shah", role="Victim Client",
                     persona="Retired teacher. Emotional. Trusted the defendant for 12 years.",
                     key_facts=["Invested $380k of retirement savings", "Received falsified quarterly statements", "Lost approximately 90% of principal"]),
+        ],
+        clues=[
+            Clue(id="c1", action="financial", label="Coral Holdings has no reinsurance license", unlocks_question="Coral Holdings LLC has never held a reinsurance license in Belize or anywhere else, has it?"),
+            Clue(id="c2", action="documents", label="Falsified quarterly statement", unlocks_question="You personally signed off on quarterly statements that inflated returns by 240%, correct?"),
+            Clue(id="c3", action="phone", label="Personal spending on client account", unlocks_question="A $47,000 Bulgari watch was purchased from the same account you told clients was in escrow, wasn't it?"),
         ],
     ),
     Case(
@@ -184,6 +221,11 @@ SEED_CASES: List[Case] = [
                     persona="Blunt, hurried. Speaks in acronyms. Slightly hostile to defense.",
                     key_facts=["Revoked defendant's access on termination", "Only two admins had root", "The audit log had a 42-minute gap"]),
         ],
+        clues=[
+            Clue(id="c1", action="forensic", label="42-minute audit log gap during exfiltration", unlocks_question="The 42-minute audit log gap begins exactly one minute before the exfiltration and ends one minute after, correct?"),
+            Clue(id="c2", action="documents", label="Second admin credentials also active that night", unlocks_question="A second administrator account was actively authenticated on the network during the same window, wasn't it?"),
+            Clue(id="c3", action="financial", label="BTC wallet clustered to another employee", unlocks_question="Chain-analysis clusters the destination BTC wallet to a device that never belonged to my client, doesn't it?"),
+        ],
     ),
     Case(
         id="case-fiction-durk-99",
@@ -207,6 +249,11 @@ SEED_CASES: List[Case] = [
             Witness(id="w2", name="Detective Ray Coles", role="Case Agent",
                     persona="Career homicide detective, direct, occasionally sarcastic. Believes lyrics are admissions.",
                     key_facts=["Interpreted three social media posts as admissions", "Did not obtain a physical firearm from defendant", "Relied on a confidential informant"]),
+        ],
+        clues=[
+            Clue(id="c1", action="documents", label="TSA manifest corroborates tour date", unlocks_question="TSA logs and the private-jet manifest independently place my client in a different state that night, correct?"),
+            Clue(id="c2", action="surveillance", label="Music video shot 3 weeks after offense", unlocks_question="The music video you rely on was filmed and released three weeks after the alleged offense, wasn't it?"),
+            Clue(id="c3", action="witnesses", label="Confidential informant is a rival's manager", unlocks_question="Your confidential informant is the manager of a competing artist with an active copyright dispute against my client, isn't he?"),
         ],
     ),
 ]
@@ -418,6 +465,94 @@ async def save_career(prog: CareerProgress):
         upsert=True,
     )
     return prog
+
+# --------------------------------------------------------------------------
+# Streaming witness (SSE) — word-by-word delivery for dramatic testimony.
+# --------------------------------------------------------------------------
+from fastapi.responses import StreamingResponse
+
+@api.post("/witness/stream")
+async def witness_stream(req: WitnessRequest):
+    case_doc = await db.cases.find_one({"id": req.case_id}, {"_id": 0})
+    if not case_doc:
+        raise HTTPException(404, "Case not found")
+    case = Case(**case_doc)
+    witness = next((w for w in case.witnesses if w.id == req.witness_id), None)
+    if not witness:
+        raise HTTPException(404, "Witness not found")
+
+    system = (
+        "You are a witness testifying under oath in a fictional federal courtroom simulator game. "
+        "Stay strictly in character. Answer only what is asked. Return a short spoken reply (1-3 sentences). "
+        "Never break the fourth wall.\n\n"
+        f"CASE: {case.title} — charges: {', '.join(case.charges)}.\n"
+        f"CASE FACTS: {case.synopsis}\n"
+        f"YOU ARE: {witness.name}, {witness.role}.\n"
+        f"PERSONA: {witness.persona}\n"
+        f"KEY FACTS YOU KNOW: {'; '.join(witness.key_facts)}\n"
+        f"CURRENT MOOD: {req.mood}. "
+        f"{'This is CROSS-EXAMINATION.' if req.is_cross_examination else 'This is DIRECT examination.'}"
+    )
+    user_text = f"Question from the lawyer: \"{req.question}\"\n\nReply as the witness in 1-3 spoken sentences."
+
+    async def event_generator():
+        if not EMERGENT_LLM_KEY:
+            yield "data: [LLM key missing]\n\n"
+            yield "event: done\ndata: {}\n\n"
+            return
+        try:
+            from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
+            chat = LlmChat(
+                api_key=EMERGENT_LLM_KEY,
+                session_id=f"witness-stream-{req.case_id}-{req.witness_id}",
+                system_message=system,
+            ).with_model("anthropic", "claude-sonnet-4-6")
+            async for ev in chat.stream_message(UserMessage(text=user_text)):
+                if isinstance(ev, TextDelta):
+                    # Escape newlines for SSE data lines
+                    safe = ev.content.replace("\r", "").replace("\n", "\\n")
+                    yield f"data: {safe}\n\n"
+                elif isinstance(ev, StreamDone):
+                    yield "event: done\ndata: {}\n\n"
+                    return
+            yield "event: done\ndata: {}\n\n"
+        except Exception as e:
+            logger.exception("Streaming failed")
+            yield f"data: [The witness hesitates. ({type(e).__name__})]\n\n"
+            yield "event: done\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+# --------------------------------------------------------------------------
+# Replays
+# --------------------------------------------------------------------------
+@api.post("/replays/save", response_model=Replay)
+async def save_replay(r: Replay):
+    doc = r.model_dump()
+    await db.replays.insert_one(doc)
+    doc.pop("_id", None)
+    return Replay(**doc)
+
+@api.get("/replays", response_model=List[Replay])
+async def list_replays(user_id: str = "guest"):
+    docs = await db.replays.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    return [Replay(**d) for d in docs]
+
+@api.get("/replays/{replay_id}", response_model=Replay)
+async def get_replay(replay_id: str):
+    doc = await db.replays.find_one({"id": replay_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Replay not found")
+    return Replay(**doc)
+
+@api.delete("/replays/{replay_id}")
+async def delete_replay(replay_id: str):
+    await db.replays.delete_one({"id": replay_id})
+    return {"ok": True}
 
 app.include_router(api)
 app.add_middleware(

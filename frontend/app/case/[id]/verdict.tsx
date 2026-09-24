@@ -1,7 +1,7 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -14,10 +14,13 @@ export default function Verdict() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const qc = useQueryClient();
-  const { id, role = "prosecutor", stats: statsStr } = useLocalSearchParams<{ id: string; role?: string; stats?: string }>();
+  const { id, role = "prosecutor", stats: statsStr, transcript: transcriptStr } = useLocalSearchParams<{
+    id: string; role?: string; stats?: string; transcript?: string;
+  }>();
   const stats = statsStr
     ? JSON.parse(statsStr as string)
     : { objections_won: 0, objections_lost: 0, evidence_introduced: 0, witnesses_examined: 0, contradictions_exposed: 0, motions_granted: 0, motions_denied: 0 };
+  const transcript = transcriptStr ? JSON.parse(transcriptStr as string) : [];
 
   const { data: c } = useQuery({ queryKey: ["case", id], queryFn: () => api.getCase(id) });
 
@@ -29,15 +32,19 @@ export default function Verdict() {
       }),
   });
 
+  const [replayId, setReplayId] = useState<string | null>(null);
+  const savedRef = useRef(false);
+
   useEffect(() => {
     if (!verdictQ.data && !verdictQ.isPending && c) {
       verdictQ.mutate();
     }
   }, [c, verdictQ]);
 
-  // Save XP on verdict
+  // Save XP + Replay once verdict returns
   useEffect(() => {
-    if (!verdictQ.data) return;
+    if (!verdictQ.data || !c || savedRef.current) return;
+    savedRef.current = true;
     (async () => {
       try {
         const cur = await api.getCareer(USER_ID);
@@ -53,8 +60,24 @@ export default function Verdict() {
         });
         qc.invalidateQueries({ queryKey: ["career", USER_ID] });
       } catch {}
+      try {
+        const saved = await api.saveReplay({
+          user_id: USER_ID,
+          case_id: id!,
+          case_title: c.title,
+          role: String(role),
+          verdict: verdictQ.data!.verdict,
+          per_charge: verdictQ.data!.per_charge,
+          sentence: verdictQ.data!.sentence,
+          xp_earned: verdictQ.data!.xp_earned,
+          transcript,
+          stats,
+        });
+        setReplayId(saved.id);
+        qc.invalidateQueries({ queryKey: ["replays", USER_ID] });
+      } catch {}
     })();
-  }, [verdictQ.data]);
+  }, [verdictQ.data, c]);
 
   if (!c || verdictQ.isPending || !verdictQ.data) {
     return (
@@ -67,7 +90,6 @@ export default function Verdict() {
 
   const v = verdictQ.data;
   const isGuilty = v.verdict === "GUILTY";
-  const anyGuilty = Object.values(v.per_charge).includes("GUILTY");
 
   return (
     <ScrollView style={styles.root} contentContainerStyle={{ paddingTop: insets.top + spacing.xl, paddingBottom: insets.bottom + 120 }} testID="verdict-screen">
@@ -118,7 +140,18 @@ export default function Verdict() {
           <Text style={styles.xpText}>+{v.xp_earned} XP EARNED</Text>
         </View>
 
-        <View style={{ flexDirection: "row", gap: spacing.md, marginTop: spacing.xl }}>
+        {replayId && (
+          <Pressable
+            testID="verdict-view-replay"
+            onPress={() => router.push({ pathname: "/replay/[id]", params: { id: replayId } })}
+            style={[styles.replayBtn]}
+          >
+            <Ionicons name="film" size={18} color={colors.brandPrimary} />
+            <Text style={styles.replayText}>VIEW & SHARE REPLAY</Text>
+          </Pressable>
+        )}
+
+        <View style={{ flexDirection: "row", gap: spacing.md, marginTop: spacing.md }}>
           <Pressable style={styles.secondaryBtn} onPress={() => router.replace("/(tabs)/cases")} testID="verdict-lib">
             <Text style={styles.secondaryText}>CASE LIBRARY</Text>
           </Pressable>
@@ -163,6 +196,8 @@ const styles = StyleSheet.create({
   statLabel: { color: colors.muted, fontFamily: fonts.text, fontSize: 10, letterSpacing: 1, fontWeight: "700" },
   xpCard: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, marginTop: spacing.xl, padding: spacing.md, backgroundColor: colors.brandPrimary, borderRadius: radius.md },
   xpText: { color: colors.onBrandPrimary, fontFamily: fonts.text, fontSize: 14, fontWeight: "700", letterSpacing: 2 },
+  replayBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm, marginTop: spacing.md, height: 52, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.brandPrimary },
+  replayText: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 13, fontWeight: "700", letterSpacing: 2 },
   primaryBtn: { flex: 1, height: 52, borderRadius: radius.md, backgroundColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
   primaryText: { color: colors.onBrandPrimary, fontFamily: fonts.text, fontSize: 13, fontWeight: "700", letterSpacing: 2 },
   secondaryBtn: { flex: 1, height: 52, borderRadius: radius.md, backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
