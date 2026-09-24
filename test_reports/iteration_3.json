@@ -1,0 +1,40 @@
+{
+  "summary": "Iteration 3 verified end-to-end. Backend: 28/28 pytest cases pass (14 regression from iter_2 + 14 new for iter_3). New coverage: (1) All 4 seeded cases carry the correct distinct judge (Hartwell/strict, Ortiz/by-the-book, Bergman/tech-skeptic, Whitmore/lenient) with tagline + sustain_bias; (2) GET /api/cases/daily returns is_daily=true, id daily-YYYY-MM-DD, a judge, 2 witnesses, 3 evidence, 2-3 clues, and is deterministic across two calls (same day); (3) POST /api/objection/rule accepts optional case_id and returns valid ruling+reasoning for strict, lenient, and no-case-id paths; (4) GET /api/witness/{case}/{w}/portrait returns data:image/...;base64 payload on first call and cached=true in <3s on the second; 404 for missing witness; (5) GET /api/replays/{id}/highlights returns kinds ⊂ {contradiction, objection_sustained, objection_overruled, evidence, verdict}, sorted desc by score, always includes verdict, capped at 5, and 404s for unknown replay. Frontend (mobile 390x844): (a) menu-daily hero card renders on the main tab above PLAY with today's date, title, synopsis, and 'Presiding: <judge> · <PERSONALITY>' line; tapping it navigates to /case/daily-YYYY-MM-DD; (b) judge-card visible on the Case Brief for both a seeded case (Johnson → Hon. Marilyn Hartwell / STRICT / tagline) and the daily case; (c) courtroom opening shows the hammer avatar with 'Presiding: <judge> · <personality>' subtitle; advancing to DIRECT swaps the avatar to the fetched witness-portrait (rendered inside the round avatar); (d) replay detail shows the 'Highlight Reel' section BEFORE the Transcript with 4 color-coded cards (contradiction=warning, verdict=gold, objection_sustained=success, evidence=info), each carrying testID highlight-{n} and share button highlight-share-{n}. No red-screen errors, no console errors during flow. No deprecated Expo packages detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_3.py",
+    "/app/backend/tests/test_federal_trial.py",
+    "/app/test_reports/pytest/iteration_3_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Judge model correctly attached to every seeded case with a distinct personality and sustain_bias in [-0.3, 0.35]; personality bias applied stochastically after LLM parsing in /api/objection/rule (post-processing, not prompt-only, which is robust).",
+    "Daily case caching key is `daily-<isoformat>` in the same `cases` collection — deterministic RNG seeded from SHA-256 of the date, so two calls on the same day return identical case (verified).",
+    "Portrait cache is keyed as `<case_id>::<witness_id>` in a dedicated `portraits` collection with data URLs stored inline; cached path returns <1s. Empty data_url path is guarded so a Gemini failure won't 500.",
+    "Highlight extractor uses simple role+substring heuristics on the transcript, always appends the verdict, sorts desc by score, and caps at 5 — matches spec exactly.",
+    "server.py is 842 lines — still under the 700-line split threshold guidance is exceeded; consider splitting into routes/judges.py, routes/portraits.py, routes/replays.py in a future iteration. Not blocking.",
+    "MongoDB _id is stripped everywhere via projection {'_id': 0}; no ObjectId leakage.",
+    "Frontend uses EXPO_PUBLIC_BACKEND_URL via src/api.ts; no hardcoded hosts. testIDs (menu-daily, judge-card, witness-portrait, highlight-{n}, highlight-share-{n}) match the review spec exactly."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_3.py (new — 14 pytest cases covering iter_3 features)"
+  ],
+  "success_rate": {
+    "backend": "100%",
+    "frontend": "100%"
+  },
+  "seed_data_creation": "Created + deleted one guest replay id 6598fef5-8100-468a-a42a-a8d3c9ec3bea for the frontend highlight-reel check. Test fixture also creates + tears down a TEST_hl_user replay. No leftover test data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend base URL from EXPO_PUBLIC_BACKEND_URL. Portrait for case-johnson-1047/w1 is now warm in db.portraits; subsequent frontend runs will not hit Gemini for it. Daily case id format is `daily-<isoformat>`; deep-link supported via GET /api/cases/daily and GET /api/cases/daily-YYYY-MM-DD. Highlight extractor requires transcript entries with role='system' + 'contradict' in text (or ⚡), role='judge' + line starting 'sustained' or 'overruled', role='lawyer' + 'moves to admit' — plus the always-appended verdict. Highlight list length is min(5, matches+1), so a transcript with fewer scoring events legitimately returns <5 cards.",
+  "rca_of_issue": "N/A — all iter_3 features pass on both backend and frontend."
+}

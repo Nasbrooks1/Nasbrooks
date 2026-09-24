@@ -16,6 +16,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type Evidence = { id: string; label: string; kind: string; summary: string };
 export type Witness = { id: string; name: string; role: string; persona: string; key_facts: string[] };
 export type Clue = { id: string; action: string; label: string; unlocks_question: string };
+export type Judge = { name: string; personality: string; tagline: string; sustain_bias: number };
 export type Case = {
   id: string;
   case_number: string;
@@ -25,10 +26,19 @@ export type Case = {
   charges: string[];
   synopsis: string;
   is_celebrity_inspired: boolean;
+  is_daily?: boolean;
   hero_image?: string;
   evidence: Evidence[];
   witnesses: Witness[];
   clues: Clue[];
+  judge?: Judge;
+};
+
+export type Highlight = {
+  kind: "contradiction" | "objection_sustained" | "objection_overruled" | "evidence" | "verdict";
+  speaker: string;
+  text: string;
+  score: number;
 };
 
 export type TranscriptLine = { speaker: string; role: string; text: string };
@@ -51,6 +61,11 @@ export const api = {
   listCases: (category?: string) =>
     request<Case[]>(`/cases${category && category !== "all" ? `?category=${category}` : ""}`),
   getCase: (id: string) => request<Case>(`/cases/${id}`),
+  getDailyCase: () => request<Case>(`/cases/daily`),
+  getWitnessPortrait: (case_id: string, witness_id: string) =>
+    request<{ data_url: string; cached: boolean }>(`/witness/${case_id}/${witness_id}/portrait`),
+  getReplayHighlights: (replay_id: string) =>
+    request<Highlight[]>(`/replays/${replay_id}/highlights`),
   witnessRespond: (body: {
     case_id: string;
     witness_id: string;
@@ -62,7 +77,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  objectionRule: (body: { objection_type: string; question: string; context?: string }) =>
+  objectionRule: (body: { objection_type: string; question: string; context?: string; case_id?: string }) =>
     request<{ ruling: "sustained" | "overruled"; reasoning: string }>(`/objection/rule`, {
       method: "POST",
       body: JSON.stringify(body),

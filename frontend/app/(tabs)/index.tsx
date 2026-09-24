@@ -1,4 +1,5 @@
 import Ionicons from "@react-native-vector-icons/ionicons";
+import { useQuery } from "@tanstack/react-query";
 import { BlurView } from "expo-blur";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
@@ -6,6 +7,7 @@ import { useRouter } from "expo-router";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { api } from "@/src/api";
 import { colors, fonts, radius, spacing } from "@/src/theme";
 
 const HERO = "https://images.pexels.com/photos/6077326/pexels-photo-6077326.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940";
@@ -25,6 +27,7 @@ const ACTIONS: Action[] = [
 export default function MainMenu() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { data: daily } = useQuery({ queryKey: ["daily-case"], queryFn: () => api.getDailyCase() });
 
   return (
     <View style={styles.root} testID="main-menu-screen">
@@ -45,6 +48,37 @@ export default function MainMenu() {
         contentContainerStyle={{ paddingHorizontal: spacing.xl, paddingBottom: spacing.xxxl }}
         showsVerticalScrollIndicator={false}
       >
+        {daily && (
+          <Pressable
+            testID="menu-daily"
+            onPress={() => router.push({ pathname: "/case/[id]", params: { id: daily.id } })}
+            style={({ pressed }) => [dailyStyles.card, pressed && { opacity: 0.85 }]}
+          >
+            {daily.hero_image && (
+              <Image source={daily.hero_image} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+            )}
+            <LinearGradient
+              colors={["rgba(10,11,14,0.3)", "rgba(10,11,14,0.9)"]}
+              locations={[0, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={dailyStyles.body}>
+              <View style={dailyStyles.pillRow}>
+                <View style={dailyStyles.freshPill}>
+                  <Ionicons name="sparkles" size={11} color={colors.onBrandPrimary} />
+                  <Text style={dailyStyles.freshText}>DAILY CASE</Text>
+                </View>
+                <Text style={dailyStyles.dateText}>{new Date().toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }).toUpperCase()}</Text>
+              </View>
+              <Text style={dailyStyles.title}>{daily.title}</Text>
+              <Text style={dailyStyles.sub} numberOfLines={2}>{daily.synopsis}</Text>
+              {daily.judge && (
+                <Text style={dailyStyles.judge}>Presiding: {daily.judge.name} · {daily.judge.personality.toUpperCase()}</Text>
+              )}
+            </View>
+          </Pressable>
+        )}
+
         <View style={styles.grid}>
           {ACTIONS.map((a) => (
             <Pressable
@@ -128,4 +162,23 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   tileLabelPrimary: { color: colors.onBrandPrimary, fontSize: 16, letterSpacing: 3 },
+});
+
+const dailyStyles = StyleSheet.create({
+  card: {
+    height: 168,
+    borderRadius: radius.lg,
+    overflow: "hidden",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.brandPrimary,
+    marginBottom: spacing.md,
+  },
+  body: { flex: 1, padding: spacing.lg, justifyContent: "space-between" },
+  pillRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  freshPill: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: colors.brandPrimary, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill },
+  freshText: { color: colors.onBrandPrimary, fontFamily: fonts.text, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
+  dateText: { color: colors.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
+  title: { color: colors.onSurface, fontFamily: fonts.display, fontSize: 24, fontWeight: "600", marginTop: spacing.xs },
+  sub: { color: colors.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 12, lineHeight: 17, marginTop: 2 },
+  judge: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 10, letterSpacing: 1.5, fontWeight: "700", marginTop: spacing.xs },
 });

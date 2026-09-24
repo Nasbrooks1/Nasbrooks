@@ -7,8 +7,10 @@ import logging
 import uuid
 import random
 import re
+import hashlib
+import base64
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 
@@ -50,6 +52,12 @@ class Clue(BaseModel):
     label: str  # short clue name shown in investigation folder
     unlocks_question: str  # the cross-examination question this clue unlocks
 
+class Judge(BaseModel):
+    name: str
+    personality: str  # strict, lenient, by-the-book, tech-skeptic
+    tagline: str
+    sustain_bias: float = 0.0  # -1.0 (lenient, over-rule everything) to +1.0 (strict, sustain everything)
+
 class Case(BaseModel):
     id: str
     case_number: str
@@ -59,10 +67,12 @@ class Case(BaseModel):
     charges: List[str]
     synopsis: str
     is_celebrity_inspired: bool = False
+    is_daily: bool = False
     hero_image: Optional[str] = None
     evidence: List[Evidence] = []
     witnesses: List[Witness] = []
     clues: List[Clue] = []
+    judge: Optional[Judge] = None
 
 class WitnessRequest(BaseModel):
     case_id: str
@@ -80,6 +90,7 @@ class ObjectionRequest(BaseModel):
     objection_type: str  # Hearsay, Relevance, Speculation, Leading, Foundation, Asked and Answered, Argumentative
     question: str
     context: Optional[str] = ""
+    case_id: Optional[str] = None
 
 class ObjectionRuling(BaseModel):
     ruling: str  # "sustained" | "overruled"
@@ -170,6 +181,12 @@ SEED_CASES: List[Case] = [
             Clue(id="c3", action="forensic", label="AFTE methodology has no error rate", unlocks_question="Doctor, the AFTE toolmark methodology has no established statistical error rate, correct?"),
             Clue(id="c4", action="surveillance", label="Missing 14-minute window on the pole cam", unlocks_question="There's a 14-minute gap in the pole-camera footage right before the alleged hand-off, isn't there?"),
         ],
+        judge=Judge(
+            name="Hon. Marilyn Hartwell",
+            personality="strict",
+            tagline="Twenty-two years on the bench. Runs a tight courtroom. Hard on hearsay and foundation.",
+            sustain_bias=0.35,
+        ),
     ),
     Case(
         id="case-vega-2101",
@@ -198,6 +215,12 @@ SEED_CASES: List[Case] = [
             Clue(id="c2", action="documents", label="Falsified quarterly statement", unlocks_question="You personally signed off on quarterly statements that inflated returns by 240%, correct?"),
             Clue(id="c3", action="phone", label="Personal spending on client account", unlocks_question="A $47,000 Bulgari watch was purchased from the same account you told clients was in escrow, wasn't it?"),
         ],
+        judge=Judge(
+            name="Hon. Samuel Ortiz",
+            personality="by-the-book",
+            tagline="Former SEC attorney. Methodical. Rewards precise legal grounds; rarely rules on gut.",
+            sustain_bias=0.05,
+        ),
     ),
     Case(
         id="case-blackbyte-3300",
@@ -226,6 +249,12 @@ SEED_CASES: List[Case] = [
             Clue(id="c2", action="documents", label="Second admin credentials also active that night", unlocks_question="A second administrator account was actively authenticated on the network during the same window, wasn't it?"),
             Clue(id="c3", action="financial", label="BTC wallet clustered to another employee", unlocks_question="Chain-analysis clusters the destination BTC wallet to a device that never belonged to my client, doesn't it?"),
         ],
+        judge=Judge(
+            name="Hon. Ruth Bergman",
+            personality="tech-skeptic",
+            tagline="Old-school. Distrusts unexplained tech jargon. Will sustain speculation on anything involving code or crypto.",
+            sustain_bias=0.25,
+        ),
     ),
     Case(
         id="case-fiction-durk-99",
@@ -255,6 +284,12 @@ SEED_CASES: List[Case] = [
             Clue(id="c2", action="surveillance", label="Music video shot 3 weeks after offense", unlocks_question="The music video you rely on was filmed and released three weeks after the alleged offense, wasn't it?"),
             Clue(id="c3", action="witnesses", label="Confidential informant is a rival's manager", unlocks_question="Your confidential informant is the manager of a competing artist with an active copyright dispute against my client, isn't he?"),
         ],
+        judge=Judge(
+            name="Hon. Charles Whitmore",
+            personality="lenient",
+            tagline="Former public defender. Trusts the jury. Overrules more than he sustains — lets the record breathe.",
+            sustain_bias=-0.3,
+        ),
     ),
 ]
 
@@ -312,6 +347,8 @@ async def list_cases(category: Optional[str] = None):
 
 @api.get("/cases/{case_id}", response_model=Case)
 async def get_case(case_id: str):
+    if case_id == "daily":
+        return await get_daily_case()
     doc = await db.cases.find_one({"id": case_id}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Case not found")
@@ -354,8 +391,23 @@ async def witness_respond(req: WitnessRequest):
 
 @api.post("/objection/rule", response_model=ObjectionRuling)
 async def objection_rule(req: ObjectionRequest):
+    # Load judge personality if a case_id was supplied
+    judge_note = "You are a federal judge in a courtroom simulator game."
+    sustain_bias = 0.0
+    if req.case_id:
+        case_doc = await db.cases.find_one({"id": req.case_id}, {"_id": 0})
+        if case_doc:
+            case = Case(**case_doc)
+            if case.judge:
+                j = case.judge
+                sustain_bias = j.sustain_bias
+                judge_note = (
+                    f"You are {j.name}, a federal judge with a {j.personality} personality. "
+                    f"{j.tagline} Rule accordingly — your personality should color your ruling."
+                )
+
     system = (
-        "You are a federal judge in a courtroom simulator game. A lawyer just raised an objection. "
+        f"{judge_note} A lawyer just raised an objection. "
         "Rule 'sustained' or 'overruled' in ONE lowercase word on the first line, then give ONE crisp sentence "
         "(<=25 words) of reasoning in judge voice. Base your ruling on the Federal Rules of Evidence."
     )
@@ -375,10 +427,22 @@ async def objection_rule(req: ObjectionRequest):
             ruling = "sustained"
         elif "overrule" in first:
             ruling = "overruled"
-        # Try to extract reasoning
         m = re.search(r"(sustained|overruled)[\.:,\-\s]+(.*)", text, re.IGNORECASE | re.DOTALL)
         if m:
             reasoning = m.group(2).strip()
+
+    # Judge personality bias — small stochastic flip weighted by bias magnitude
+    if sustain_bias != 0.0:
+        r = random.random()
+        # bias > 0 leans toward sustaining; if currently overruled, flip with prob = bias
+        # bias < 0 leans toward overruling; if currently sustained, flip with prob = |bias|
+        if ruling == "overruled" and sustain_bias > 0 and r < sustain_bias:
+            ruling = "sustained"
+            reasoning = f"On reflection — {reasoning}"
+        elif ruling == "sustained" and sustain_bias < 0 and r < abs(sustain_bias):
+            ruling = "overruled"
+            reasoning = f"I'll let it stand — {reasoning}"
+
     return ObjectionRuling(ruling=ruling, reasoning=reasoning[:400])
 
 @api.post("/verdict", response_model=VerdictResponse)
@@ -553,6 +617,219 @@ async def get_replay(replay_id: str):
 async def delete_replay(replay_id: str):
     await db.replays.delete_one({"id": replay_id})
     return {"ok": True}
+
+# --------------------------------------------------------------------------
+# Witness portraits (Gemini Nano Banana) — lazy generated and cached in MongoDB.
+# --------------------------------------------------------------------------
+class Portrait(BaseModel):
+    key: str
+    data_url: str
+    created_at: str
+
+async def _generate_portrait(witness: Witness) -> str:
+    """Generate a base64 courtroom-sketch portrait. Returns a data URL."""
+    if not EMERGENT_LLM_KEY:
+        return ""
+    prompt = (
+        f"A monochrome courtroom sketch portrait, head and shoulders framing, "
+        f"of a fictional character named {witness.name} who is a {witness.role}. "
+        f"Character notes: {witness.persona}. "
+        f"Style: pencil and ink on cream paper, loose expressive linework, cinematic dark lighting, "
+        f"neutral background, no text, no watermarks. Single portrait, centered."
+    )
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    chat = LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=f"portrait-{witness.id}-{uuid.uuid4()}",
+        system_message="You are an illustrator generating character portraits.",
+    ).with_model("gemini", "gemini-3.1-flash-image-preview").with_params(modalities=["image", "text"])
+    _text, images = await chat.send_message_multimodal_response(UserMessage(text=prompt))
+    if not images:
+        return ""
+    img = images[0]
+    mime = img.get("mime_type", "image/png")
+    data = img.get("data", "")
+    return f"data:{mime};base64,{data}"
+
+@api.get("/witness/{case_id}/{witness_id}/portrait")
+async def get_witness_portrait(case_id: str, witness_id: str):
+    key = f"{case_id}::{witness_id}"
+    cached = await db.portraits.find_one({"key": key}, {"_id": 0})
+    if cached and cached.get("data_url"):
+        return {"data_url": cached["data_url"], "cached": True}
+
+    case_doc = await db.cases.find_one({"id": case_id}, {"_id": 0})
+    if not case_doc:
+        raise HTTPException(404, "Case not found")
+    case = Case(**case_doc)
+    witness = next((w for w in case.witnesses if w.id == witness_id), None)
+    if not witness:
+        raise HTTPException(404, "Witness not found")
+
+    try:
+        data_url = await _generate_portrait(witness)
+    except Exception:
+        logger.exception("Portrait gen failed")
+        data_url = ""
+
+    if data_url:
+        await db.portraits.update_one(
+            {"key": key},
+            {"$set": {"key": key, "data_url": data_url, "created_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True,
+        )
+    return {"data_url": data_url, "cached": False}
+
+# --------------------------------------------------------------------------
+# Trial highlight reel — heuristic extraction of the 5 best moments.
+# --------------------------------------------------------------------------
+class Highlight(BaseModel):
+    kind: str  # contradiction, objection_sustained, objection_overruled, evidence, verdict
+    speaker: str
+    text: str
+    score: int
+
+def _extract_highlights(replay: Replay, limit: int = 5) -> List[Highlight]:
+    scored: List[Highlight] = []
+    lines = replay.transcript
+    for i, l in enumerate(lines):
+        text_l = l.text.lower()
+        # Contradiction moments (system line flagged in transcript)
+        if l.role == "system" and ("contradict" in text_l or "⚡" in l.text):
+            # Attach the preceding witness line for context
+            prev = next((lines[j] for j in range(i - 1, -1, -1) if lines[j].role == "witness"), None)
+            scored.append(Highlight(kind="contradiction", speaker=(prev.speaker if prev else "WITNESS"),
+                                    text=(prev.text if prev else l.text), score=100))
+        elif l.role == "judge" and text_l.startswith("sustained"):
+            scored.append(Highlight(kind="objection_sustained", speaker=l.speaker, text=l.text, score=80))
+        elif l.role == "judge" and text_l.startswith("overruled"):
+            scored.append(Highlight(kind="objection_overruled", speaker=l.speaker, text=l.text, score=40))
+        elif l.role == "lawyer" and "moves to admit" in text_l:
+            scored.append(Highlight(kind="evidence", speaker=l.speaker, text=l.text, score=60))
+    # Always end with the verdict itself
+    scored.append(Highlight(
+        kind="verdict",
+        speaker="JURY",
+        text=f"Verdict: {replay.verdict}" + (f" — {replay.sentence}" if replay.sentence else ""),
+        score=90,
+    ))
+    scored.sort(key=lambda h: h.score, reverse=True)
+    return scored[:limit]
+
+@api.get("/replays/{replay_id}/highlights", response_model=List[Highlight])
+async def replay_highlights(replay_id: str):
+    doc = await db.replays.find_one({"id": replay_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Replay not found")
+    return _extract_highlights(Replay(**doc))
+
+# --------------------------------------------------------------------------
+# Daily case — one procedurally-blended case a day, cached in DB by date.
+# --------------------------------------------------------------------------
+DAILY_DEFENDANTS = [
+    ("Randall", "Cooke"), ("Marisa", "Delgado"), ("Ike", "Sinclair"),
+    ("Yvonne", "Park"), ("Devin", "Rasmussen"), ("Aya", "Nakashima"),
+    ("Colton", "Frye"), ("Simone", "Bautista"),
+]
+DAILY_SCENARIOS = [
+    {"cat": "violent", "diff": "Veteran", "synopsis": "A late-night warehouse hit alleged to be part of a broader turf war. The government's chief cooperator changed his story after receiving a plea offer.",
+     "charges": ["Attempted Murder (18 U.S.C. § 1113)", "Firearms Offense (18 U.S.C. § 924(c))"],
+     "witness_archetypes": [
+        {"role": "Federal Agent", "persona": "Calm and clinical FBI Task Force veteran. Precise. Dislikes speculation.",
+         "facts": ["Executed the search warrant", "Personally interviewed the cooperator twice", "Chain of custody preserved"]},
+        {"role": "Cooperating Witness", "persona": "Nervous, defensive cooperator. Slips into slang when pressed.",
+         "facts": ["Was on scene", "Has a 5K1.1 cooperation letter", "Two prior state convictions"]},
+     ],
+     "clues": [
+        {"action": "phone", "label": "Cell records place defendant 4 miles away", "q": "Cell tower records place my client's handset four miles from the scene at the exact moment, don't they?"},
+        {"action": "witnesses", "label": "Cooperator changed story after plea", "q": "You changed your written statement on three material points after receiving your plea offer, correct?"},
+        {"action": "forensic", "label": "Shell casings never matched to defendant", "q": "None of the recovered shell casings can be forensically linked to any firearm in my client's possession, isn't that true?"},
+     ]},
+    {"cat": "financial", "diff": "Rookie", "synopsis": "A start-up CFO is accused of running a payroll skim through fake vendor accounts totalling $1.8M over four fiscal quarters.",
+     "charges": ["Wire Fraud (18 U.S.C. § 1343)", "Aggravated Identity Theft (18 U.S.C. § 1028A)"],
+     "witness_archetypes": [
+        {"role": "Forensic Accountant", "persona": "Methodical, cites GAAP frequently. Concedes limits when pushed.",
+         "facts": ["Traced 47 vendor invoices", "12 vendors have no independent existence", "Reconciliation gap: $1.8M"]},
+        {"role": "Corporate Witness", "persona": "Blunt CEO. Angry the fraud happened under his nose.",
+         "facts": ["Signed off on the vendor list quarterly", "Never met most vendors", "Fired the defendant on discovery"]},
+     ],
+     "clues": [
+        {"action": "documents", "label": "Vendor W-9s share an address", "q": "Nine of the twelve vendor W-9s share the same suite number at a Delaware mailbox service, don't they?"},
+        {"action": "financial", "label": "Personal card paid one 'vendor'", "q": "One of these vendor invoices was paid using my client's personal Amex, wasn't it?"},
+     ]},
+    {"cat": "drug", "diff": "Veteran", "synopsis": "A DEA sting alleged a cross-border MDMA lab, but the confidential informant later recanted key portions of his affidavit.",
+     "charges": ["Conspiracy to Distribute (21 U.S.C. § 846)", "Manufacturing (21 U.S.C. § 841(a)(1))"],
+     "witness_archetypes": [
+        {"role": "Federal Agent", "persona": "DEA agent, direct, cold. Runs a large caseload.",
+         "facts": ["Ran the CI for 14 months", "Executed the lab search", "Seized 400g of MDMA precursors"]},
+        {"role": "Confidential Informant", "persona": "Evasive, working off a state charge. Hesitates before answers.",
+         "facts": ["Signed a proffer letter", "Retracted portions of his affidavit", "Was paid $12k in DEA funds"]},
+     ],
+     "clues": [
+        {"action": "witnesses", "label": "CI recanted three affidavit paragraphs", "q": "You submitted a sworn declaration recanting paragraphs 4, 7, and 12 of your original affidavit, didn't you?"},
+        {"action": "forensic", "label": "Precursors below manufacturing threshold", "q": "The seized precursor amount falls below the DEA's own manufacturing-threshold guideline, correct?"},
+     ]},
+]
+DAILY_HEROES = [
+    "https://images.pexels.com/photos/6077326/pexels-photo-6077326.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "https://images.pexels.com/photos/8382083/pexels-photo-8382083.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "https://images.pexels.com/photos/6077430/pexels-photo-6077430.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+]
+DAILY_JUDGES = [
+    Judge(name="Hon. Priya Nair", personality="strict", tagline="Twenty years on the bench. No patience for imprecision.", sustain_bias=0.35),
+    Judge(name="Hon. Marcus Lin", personality="lenient", tagline="Trusts the jury. Lets the record breathe.", sustain_bias=-0.3),
+    Judge(name="Hon. Sarah Brenner", personality="by-the-book", tagline="Federal Rules of Evidence, verbatim. Every time.", sustain_bias=0.05),
+    Judge(name="Hon. Emeka Adeyemi", personality="tech-skeptic", tagline="Unimpressed by jargon. Wants plain English.", sustain_bias=0.2),
+]
+
+def _build_daily_case(day: str) -> Case:
+    seed = int(hashlib.sha256(day.encode()).hexdigest(), 16)
+    rnd = random.Random(seed)
+    first, last = rnd.choice(DAILY_DEFENDANTS)
+    scenario = rnd.choice(DAILY_SCENARIOS)
+    hero = rnd.choice(DAILY_HEROES)
+    judge = rnd.choice(DAILY_JUDGES)
+    case_no = f"D-{day.replace('-', '')}"
+    witnesses: List[Witness] = []
+    for i, w in enumerate(scenario["witness_archetypes"], start=1):
+        witnesses.append(Witness(
+            id=f"w{i}", name=f"{'Agent' if 'Agent' in w['role'] else ''} {rnd.choice(['Reed','Kim','Vega','Ortiz','Hale','Novak','Shah','Park'])}".strip(),
+            role=w["role"], persona=w["persona"], key_facts=w["facts"],
+        ))
+    clues: List[Clue] = [
+        Clue(id=f"c{i}", action=cl["action"], label=cl["label"], unlocks_question=cl["q"])
+        for i, cl in enumerate(scenario["clues"], start=1)
+    ]
+    evidence: List[Evidence] = [
+        Evidence(id="e1", label="Government Exhibit A", kind="document", summary="Primary charging document filed with the court."),
+        Evidence(id="e2", label="Government Exhibit B", kind="forensic", summary="Forensic examiner's report tied to the alleged offense."),
+        Evidence(id="e3", label="Government Exhibit C", kind="message", summary="Communications the government contends corroborate intent."),
+    ]
+    return Case(
+        id=f"daily-{day}",
+        case_number=case_no,
+        title=f"United States v. {last}",
+        category=scenario["cat"],
+        difficulty=scenario["diff"],
+        charges=scenario["charges"],
+        synopsis=scenario["synopsis"] + f" Today's defendant: {first} {last}.",
+        is_daily=True,
+        hero_image=hero,
+        evidence=evidence,
+        witnesses=witnesses,
+        clues=clues,
+        judge=judge,
+    )
+
+@api.get("/cases/daily", response_model=Case)
+async def get_daily_case():
+    day = date.today().isoformat()
+    cached = await db.cases.find_one({"id": f"daily-{day}"}, {"_id": 0})
+    if cached:
+        return Case(**cached)
+    c = _build_daily_case(day)
+    await db.cases.update_one({"id": c.id}, {"$set": c.model_dump()}, upsert=True)
+    return c
 
 app.include_router(api)
 app.add_middleware(

@@ -64,6 +64,21 @@ export default function CaseBrief() {
             </View>
           </Section>
 
+          {c.judge && (
+            <Section title="Presiding Judge">
+              <View style={styles.judgeCard} testID="judge-card">
+                <View style={styles.judgeIcon}>
+                  <Ionicons name="hammer" size={20} color={colors.brandPrimary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.judgeName}>{c.judge.name}</Text>
+                  <Text style={styles.judgePersonality}>{c.judge.personality.toUpperCase()}</Text>
+                  <Text style={styles.judgeTagline}>{c.judge.tagline}</Text>
+                </View>
+              </View>
+            </Section>
+          )}
+
           <Section title="Evidence Inventory">
             <View style={styles.statGrid}>
               <StatTile n={c.evidence.length} label="Evidence Items" icon="folder" />
@@ -149,6 +164,11 @@ const styles = StyleSheet.create({
   evidenceIcon: { width: 36, height: 36, borderRadius: 18, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
   evidenceLabel: { color: colors.onSurface, fontFamily: fonts.text, fontSize: 13, fontWeight: "700" },
   evidenceSummary: { color: colors.muted, fontFamily: fonts.text, fontSize: 11, marginTop: 2 },
+  judgeCard: { flexDirection: "row", gap: spacing.md, padding: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.brandPrimary, alignItems: "center" },
+  judgeIcon: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center" },
+  judgeName: { color: colors.onSurface, fontFamily: fonts.display, fontSize: 16, fontWeight: "600" },
+  judgePersonality: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 10, letterSpacing: 2, fontWeight: "700", marginTop: 2 },
+  judgeTagline: { color: colors.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 12, marginTop: 4, lineHeight: 17 },
   footer: { position: "absolute", left: 0, right: 0, bottom: 0, flexDirection: "row", gap: spacing.md, paddingHorizontal: spacing.xl, paddingTop: spacing.md, backgroundColor: colors.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.divider },
   primaryBtn: { flex: 1.4, height: 52, borderRadius: radius.md, backgroundColor: colors.brandPrimary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm },
   primaryText: { color: colors.onBrandPrimary, fontFamily: fonts.text, fontSize: 13, fontWeight: "700", letterSpacing: 2 },

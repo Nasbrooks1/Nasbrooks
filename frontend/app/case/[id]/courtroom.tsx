@@ -2,6 +2,7 @@ import Ionicons from "@react-native-vector-icons/ionicons";
 import { useQuery } from "@tanstack/react-query";
 import { BlurView } from "expo-blur";
 import * as Haptics from "expo-haptics";
+import { Image } from "expo-image";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -61,6 +62,15 @@ export default function Courtroom() {
 
   const witnesses: Witness[] = c?.witnesses || [];
   const currentWitness = witnesses[witnessIdx];
+
+  // Lazy-load portrait for current witness
+  const portraitQ = useQuery({
+    queryKey: ["portrait", c?.id, currentWitness?.id],
+    queryFn: () => api.getWitnessPortrait(c!.id, currentWitness!.id),
+    enabled: !!c && !!currentWitness,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
 
   // Seed opening lines once case loads
   useEffect(() => {
@@ -163,7 +173,7 @@ export default function Courtroom() {
       pushLine({ speaker: role === "defense" ? "PROSECUTION" : "DEFENSE", role: "lawyer", text: `Objection — ${type}.` });
       setBusy(true);
       try {
-        const ruling = await api.objectionRule({ objection_type: type, question: lastQuestion });
+        const ruling = await api.objectionRule({ objection_type: type, question: lastQuestion, case_id: c?.id });
         pushLine({ speaker: "JUDGE", role: "judge", text: `${ruling.ruling.toUpperCase()}. ${ruling.reasoning}` });
         const won = ruling.ruling === "sustained";
         setStats((s) => ({
@@ -264,9 +274,23 @@ export default function Courtroom() {
 
         <View style={styles.speakerCard}>
           <View style={styles.speakerAvatar}>
-            <Ionicons name={phase === "opening" ? "hammer" : "person"} size={40} color={colors.brandPrimary} />
+            {phase !== "opening" && portraitQ.data?.data_url ? (
+              <Image
+                source={portraitQ.data.data_url}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+                testID="witness-portrait"
+              />
+            ) : phase !== "opening" && portraitQ.isPending ? (
+              <ActivityIndicator color={colors.brandPrimary} />
+            ) : (
+              <Ionicons name={phase === "opening" ? "hammer" : "person"} size={40} color={colors.brandPrimary} />
+            )}
           </View>
           <Text style={styles.speakerName}>{speakerTitle}</Text>
+          {c.judge && phase === "opening" && (
+            <Text style={styles.judgeSub}>Presiding: {c.judge.name} · {c.judge.personality}</Text>
+          )}
           <View style={styles.pill}>
             <View style={[styles.pillDot, { backgroundColor: busy ? colors.warning : colors.success }]} />
             <Text style={styles.pillText}>{busy ? "TESTIFYING…" : "ON THE STAND"}</Text>
@@ -425,8 +449,9 @@ const styles = StyleSheet.create({
   caseLine: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
   caseTitle: { color: colors.onSurface, fontFamily: fonts.display, fontSize: 16, fontWeight: "600", marginTop: 2 },
   speakerCard: { alignItems: "center", padding: spacing.lg, marginTop: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border, gap: spacing.sm },
-  speakerAvatar: { width: 72, height: 72, borderRadius: 36, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: colors.brandPrimary },
+  speakerAvatar: { width: 88, height: 88, borderRadius: 44, backgroundColor: colors.brandTertiary, alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: colors.brandPrimary, overflow: "hidden" },
   speakerName: { color: colors.onSurface, fontFamily: fonts.display, fontSize: 18, fontWeight: "600", textAlign: "center" },
+  judgeSub: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 11, fontWeight: "700", letterSpacing: 1.5, textAlign: "center" },
   pill: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill, backgroundColor: colors.surfaceTertiary },
   pillDot: { width: 6, height: 6, borderRadius: 3 },
   pillText: { color: colors.onSurfaceSecondary, fontFamily: fonts.text, fontSize: 10, letterSpacing: 1.5, fontWeight: "700" },

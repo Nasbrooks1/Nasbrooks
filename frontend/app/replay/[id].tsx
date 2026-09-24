@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api, Replay, TranscriptLine } from "@/src/api";
+import { api, Highlight, Replay, TranscriptLine } from "@/src/api";
 import { colors, fonts, radius, spacing } from "@/src/theme";
 
 export default function ReplayDetail() {
@@ -15,6 +15,11 @@ export default function ReplayDetail() {
   const { data: r, isLoading } = useQuery<Replay>({
     queryKey: ["replay", id],
     queryFn: () => api.getReplay(id),
+  });
+  const { data: highlights } = useQuery<Highlight[]>({
+    queryKey: ["replay-highlights", id],
+    queryFn: () => api.getReplayHighlights(id),
+    enabled: !!r,
   });
 
   const onShare = async () => {
@@ -91,6 +96,23 @@ export default function ReplayDetail() {
           </View>
         </View>
 
+        <Text style={styles.sectionTitle}>Highlight Reel</Text>
+        <View style={{ gap: spacing.sm, marginTop: spacing.md }}>
+          {(highlights || []).map((h, i) => (
+            <HighlightCard key={i} h={h} rank={i + 1} onShare={async () => {
+              const msg = `⚖️ ${r.case_title} — Highlight #${i + 1}\n${labelFor(h.kind)}\n${h.speaker}: ${h.text}\n\n(Federal Trial — cinematic courtroom simulator.)`;
+              try {
+                if (Platform.OS === "web") {
+                  await navigator.clipboard?.writeText(msg);
+                  Alert.alert("Copied", "Highlight copied to clipboard.");
+                } else {
+                  await Share.share({ message: msg });
+                }
+              } catch {}
+            }} />
+          ))}
+        </View>
+
         <Text style={styles.sectionTitle}>Transcript</Text>
         <View style={{ gap: spacing.md, marginTop: spacing.md }}>
           {r.transcript.map((l: TranscriptLine, i) => (
@@ -120,6 +142,51 @@ function Line({ l }: { l: TranscriptLine }) {
   );
 }
 
+function labelFor(kind: Highlight["kind"]) {
+  switch (kind) {
+    case "contradiction": return "⚡ CONTRADICTION EXPOSED";
+    case "objection_sustained": return "🎯 OBJECTION SUSTAINED";
+    case "objection_overruled": return "❌ OBJECTION OVERRULED";
+    case "evidence": return "📎 EVIDENCE ADMITTED";
+    case "verdict": return "⚖️ FINAL VERDICT";
+  }
+}
+
+function iconFor(kind: Highlight["kind"]): React.ComponentProps<typeof Ionicons>["name"] {
+  switch (kind) {
+    case "contradiction": return "flash";
+    case "objection_sustained": return "hand-left";
+    case "objection_overruled": return "close-circle";
+    case "evidence": return "documents";
+    case "verdict": return "hammer";
+  }
+}
+
+function HighlightCard({ h, rank, onShare }: { h: Highlight; rank: number; onShare: () => void }) {
+  const accent = h.kind === "contradiction" ? colors.warning
+    : h.kind === "objection_sustained" ? colors.success
+    : h.kind === "objection_overruled" ? colors.error
+    : h.kind === "verdict" ? colors.brandPrimary
+    : colors.info;
+  return (
+    <View style={[styles.highlight, { borderColor: accent }]} testID={`highlight-${rank}`}>
+      <View style={[styles.highlightBadge, { backgroundColor: accent }]}>
+        <Ionicons name={iconFor(h.kind)} size={14} color={colors.surface} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <View style={styles.highlightHeader}>
+          <Text style={[styles.highlightLabel, { color: accent }]}>#{rank} · {labelFor(h.kind)}</Text>
+          <Pressable onPress={onShare} testID={`highlight-share-${rank}`} hitSlop={8}>
+            <Ionicons name="share-outline" size={16} color={colors.brandPrimary} />
+          </Pressable>
+        </View>
+        <Text style={styles.highlightSpeaker}>{h.speaker}</Text>
+        <Text style={styles.highlightText}>{h.text}</Text>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.surface },
   header: { flexDirection: "row", alignItems: "center", gap: spacing.sm, paddingHorizontal: spacing.lg, paddingBottom: spacing.md, borderBottomColor: colors.divider, borderBottomWidth: StyleSheet.hairlineWidth },
@@ -138,4 +205,10 @@ const styles = StyleSheet.create({
   text: { color: colors.onSurface, fontFamily: fonts.text, fontSize: 14, lineHeight: 21 },
   shareBtn: { marginTop: spacing.xxl, height: 52, borderRadius: radius.md, backgroundColor: colors.brandPrimary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: spacing.sm },
   shareText: { color: colors.onBrandPrimary, fontFamily: fonts.text, fontSize: 13, fontWeight: "700", letterSpacing: 2 },
+  highlight: { flexDirection: "row", gap: spacing.md, padding: spacing.md, backgroundColor: colors.surfaceSecondary, borderRadius: radius.md, borderWidth: 1, alignItems: "flex-start" },
+  highlightBadge: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
+  highlightHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  highlightLabel: { fontFamily: fonts.text, fontSize: 10, fontWeight: "700", letterSpacing: 1.5, flex: 1 },
+  highlightSpeaker: { color: colors.brandPrimary, fontFamily: fonts.text, fontSize: 10, fontWeight: "700", letterSpacing: 1.5, marginTop: 4 },
+  highlightText: { color: colors.onSurface, fontFamily: fonts.text, fontSize: 13, lineHeight: 19, marginTop: 4 },
 });
