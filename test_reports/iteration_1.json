@@ -1,0 +1,51 @@
+{
+  "summary": "Ran pytest against all 9 backend endpoints and drove the full mobile flow (menu -> role -> cases -> brief -> investigation -> courtroom -> ASK/LLM/OBJECTION) via Playwright on 390x844 viewport. 9/10 backend tests pass; 1 critical bug: POST /api/verdict returns 500. All frontend screens render, testIDs exist, LLM witness reply lands in the transcript within ~15s, objection overlay lists all 7 grounds.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/verdict",
+        "issue": "AttributeError: 'VerdictRequest' object has no attribute 'role' (server.py line 353). Role lives on req.stats.role, not req.role, so the endpoint 500s for every call. Also breaks the verdict screen on the frontend.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Courtroom action bar testID naming vs review spec",
+        "issue": "Review request expects testIDs btn-ask / btn-objection / btn-begin-testimony but the app implements act-question / act-objection / act-next-phase. Question options use ask-<prefix> and objection buttons use obj-<Type>. Functionally correct, but the naming should be aligned with the spec so downstream automated tests keep working.",
+        "affected_testIDs": ["btn-ask", "btn-objection", "btn-begin-testimony", "act-question", "act-objection", "act-next-phase", "ask-*", "obj-*"]
+      }
+    ],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_federal_trial.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Fix POST /api/verdict: replace `req.role` with `req.stats.role` on line 353 (and re-run pytest). This is the only backend blocker.",
+    "Optionally rename courtroom action-bar testIDs to match the review spec (btn-ask/btn-objection/btn-begin-testimony) or update the spec/tests. Not blocking.",
+    "Verify /api/verdict fix does not break xp_earned / sentence formulas after the field is corrected."
+  ],
+  "critical_code_review_comments": [
+    "server.py compute_verdict reads req.role but VerdictRequest only has {case_id, stats}; stats itself contains role — this indicates the endpoint was never smoke-tested end to end.",
+    "seed_cases runs on every startup with upsert — fine, but consider gating behind an env flag once real data lands.",
+    "LLM fallback in llm_complete returns a plain string on missing key/error; witness_respond then still returns 200 with placeholder text. Acceptable per spec but should be logged as degraded mode."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_federal_trial.py (new)"
+  ],
+  "success_rate": {
+    "backend": "90%",
+    "frontend": "100%"
+  },
+  "seed_data_creation": "Created TEST_user_pytest career record via POST /api/career/save; safe to delete.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend base URL https://trial-flow-3.preview.emergentagent.com. Pytest suite is at /app/backend/tests/test_federal_trial.py — run `pytest backend/tests/test_federal_trial.py -v` from /app. Courtroom uses testIDs act-question, act-objection, act-next-phase, act-evidence, court-back, court-verdict; question sheet options use ask-<first15chars>; objection modal uses obj-<Type> (obj-Hearsay, obj-Relevance, obj-Speculation, obj-Leading, obj-Foundation, obj-Asked and Answered, obj-Argumentative, obj-cancel). LLM witness reply takes ~12-18s; give it 20s+ before asserting transcript text.",
+  "rca_of_issue": "POST /api/verdict 500 — RCA: server.py line 353 does `if req.role == 'defense'` but VerdictRequest schema is {case_id: str, stats: TrialStats}. Role only exists on the nested stats object. Reproduction: POST /api/verdict with valid payload → pydantic accepts body, but code path AttributeErrors. Fix: change `req.role` to `req.stats.role` (and confirm the frontend verdict screen sends stats.role, which it appears to via role query param carried through)."
+}

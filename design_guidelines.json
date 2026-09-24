@@ -1,0 +1,192 @@
+{
+  "app_name": "Federal Trial",
+  "personality": "6 Glass / Luxe DARK",
+  "personality_one_liner": "A cinematic, dramatic legal simulator built on obsidian surfaces, frosted glass, and antique gold accents.",
+  "color": {
+    "surface": "#0A0B0E",
+    "onSurface": "#EAECEF",
+    "surfaceSecondary": "#14161C",
+    "onSurfaceSecondary": "#D1D6E0",
+    "surfaceTertiary": "#1E212A",
+    "onSurfaceTertiary": "#BAC1CE",
+    "surfaceInverse": "#F5F3ED",
+    "onSurfaceInverse": "#0A0B0E",
+    "brand": "#D4AF37",
+    "onBrand": "#000000",
+    "brandPrimary": "#D4AF37",
+    "onBrandPrimary": "#000000",
+    "brandSecondary": "#B5952F",
+    "onBrandSecondary": "#000000",
+    "brandTertiary": "rgba(212, 175, 55, 0.15)",
+    "onBrandTertiary": "#D4AF37",
+    "success": "#2A6E46",
+    "onSuccess": "#FFFFFF",
+    "warning": "#A87C22",
+    "onWarning": "#FFFFFF",
+    "error": "#8B2323",
+    "onError": "#FFFFFF",
+    "info": "#2F5073",
+    "onInfo": "#FFFFFF",
+    "border": "#232630",
+    "borderStrong": "#3B404D",
+    "divider": "#1B1E26",
+    "muted": "#737D8F"
+  },
+  "typography": {
+    "displayFontFamily": "CormorantGaramond",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Generous cinematic spacing. Content breathes. Do not cramp elements. Focus on deliberate margins and paddings.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "0",
+  "navigation": "bottom_tabs_with_stack",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": true,
+    "do's": [
+      "Use blur on bottom tab bar over dark backgrounds.",
+      "Use glass effects for objection popups and dramatic judge rulings.",
+      "Apply translucent tinted base (≥75% of surface) underneath foreground content for readability."
+    ],
+    "dont's": [
+      "Never blur body text regions or form fields.",
+      "Don't stack more than 2 blur surfaces on one screen."
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "haptics": {
+    "events": {
+      "primary_button_press": "impactLight",
+      "objection_triggered": "impactHeavy",
+      "judge_ruling": "notificationSuccess",
+      "tab_change": "selection"
+    }
+  },
+  "screens": [
+    {
+      "name": "Home (Main Menu)",
+      "purpose": "The dramatic cinematic entry point to the game.",
+      "states": {
+        "loading": "Centered glowing gold scales of justice spinner.",
+        "empty": "N/A",
+        "error": "Failed to load profile. Retry."
+      },
+      "layout": "Large atmospheric hero image (gavel) with a subtle vertical gradient to obsidian. Grid or list of primary actions (PLAY, CAREER MODE, CASE LIBRARY, SETTINGS) built as frosted glass cards over the hero background. Stick to bottom 1/3 of the screen for main actions to allow the dramatic visual to breathe."
+    },
+    {
+      "name": "Role Selection",
+      "purpose": "Carousel to pick the player's role with high immersion.",
+      "states": {
+        "loading": "Spinner.",
+        "empty": "N/A",
+        "error": "N/A"
+      },
+      "layout": "Horizontal paginated carousel. Each role card features a cinematic portrait image with a heavy gradient-to-dark scrim pattern at the bottom. The title is written in Cormorant Garamond, with the description underneath in Geist. A 'Select Role' gold primary CTA is anchored at the bottom of the screen."
+    },
+    {
+      "name": "Case Library",
+      "purpose": "Browse and filter available federal cases.",
+      "states": {
+        "loading": "Skeleton list rows.",
+        "empty": "No cases unlocked in this category yet. Keep playing to level up.",
+        "error": "Failed to fetch cases. Tap to retry."
+      },
+      "layout": "Sticky glass header with a horizontal scrollable row of chips (Violent Crime, Cybercrime, Financial). Beneath it, a vertical list of Case Cards. Each card uses a dark tinted background, displaying US v. [Name] with charges and difficulty rating."
+    },
+    {
+      "name": "Investigation Mode",
+      "purpose": "Simulate the detective / pre-trial discovery process.",
+      "states": {
+        "loading": "Spinner.",
+        "empty": "No evidence found yet.",
+        "error": "Action failed."
+      },
+      "layout": "Diegetic-inspired interface. Dark wood or cinematic desk background image behind a frosted glass panel. Grid of investigation actions (Witnesses, Phone Records, Forensics) styled as polished glass folders or diegetic tabs. Use press-and-hold for deeper interactions, keeping the UI scannable."
+    },
+    {
+      "name": "Courtroom (Gameplay)",
+      "purpose": "The core gameplay loop of the trial simulation.",
+      "states": {
+        "loading": "Preparing courtroom...",
+        "empty": "N/A",
+        "error": "Trial disconnected. Reconnect."
+      },
+      "layout": "Split-pane layout. Top 40% shows the active speaker (Judge, Witness, or opposing counsel) as a dramatic portrait or avatar. Middle 40% is a live scrolling transcript feed of the testimony. Bottom 20% contains a fixed, robust action bar with glassmorphic buttons for Questions, Evidence, and a prominent 'OBJECTION' CTA. When Objection is tapped, a full-screen blurred overlay reveals specific objection types (Hearsay, Relevance) in a grid."
+    }
+  ],
+  "images": {
+    "hero_background": {
+      "url": "https://images.pexels.com/photos/6077326/pexels-photo-6077326.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Dramatic gavel striking sound block"
+    },
+    "case_library_hero": {
+      "url": "https://images.pexels.com/photos/6077430/pexels-photo-6077430.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Lady Justice figurine in dark dramatic lighting"
+    },
+    "investigation_desk": {
+      "url": "https://images.pexels.com/photos/8382083/pexels-photo-8382083.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Detective desk with investigation files in dark room"
+    },
+    "role_judge": {
+      "url": "https://images.pexels.com/photos/34817069/pexels-photo-34817069.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Authoritative judge sitting at desk in courtroom"
+    },
+    "role_prosecutor": {
+      "url": "https://images.pexels.com/photos/34817106/pexels-photo-34817106.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Confident lawyer presenting a case in elegant courtroom"
+    },
+    "role_defense": {
+      "url": "https://images.pexels.com/photos/32907709/pexels-photo-32907709.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Portrait of young defense attorney"
+    },
+    "role_defendant": {
+      "url": "https://images.pexels.com/photos/7773261/pexels-photo-7773261.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Close-up of hands in handcuffs resting on a table"
+    },
+    "role_agent": {
+      "url": "https://images.pexels.com/photos/24425381/pexels-photo-24425381.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Elegant man in suit exuding a secret agent vibe"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Prioritize 'Glass / Luxe DARK' aesthetic: Deep obsidian surfaces, subtle grain, and frosted glass over a single antique gold primary accent. Avoid any blue/indigo/purple hues.",
+    "Typography MUST use Cormorant Garamond for all primary headings, screen titles, and dramatic role headers. Body text and interactive UI labels must use Geist to maintain clean legibility.",
+    "Implement the 'gradient-to-dark scrim pattern' rigorously over all cinematic background images (hero backgrounds, role portraits). Use a 3-stop vertical linear gradient to ensure text readability.",
+    "Courtroom Gameplay screen needs a highly responsive UI. Ensure the 'Objection' CTA is prominent and easily reachable in the thumb-zone. Objection overlays should utilize blur and pop up instantly with heavy haptic feedback.",
+    "Investigation Mode should adopt a subtle diegetic feel. Use the provided investigation_desk image overlaid with a heavy dark tint and place glassmorphic folders/actions on top of it.",
+    "All navigation (Home, Cases, Career, Profile) should sit in a frosted glass bottom tab bar when scrolling content sits behind it.",
+    "Ensure every screen has explicit Loading, Empty, and Error states filling the safe area boundaries."
+  ]
+}
